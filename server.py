@@ -54,13 +54,6 @@ CLAUDE_AUTO_APPROVE = os.getenv("CLAUDE_AUTO_APPROVE", "all")  # all, none, sele
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", "/workspace")
 OUTPUT_ROOT = os.getenv("OUTPUT_ROOT", "/sites")
 
-# 主动轮询模式配置
-TASK_POLL_ENABLED = os.getenv("TASK_POLL_ENABLED", "false").lower() == "true"
-TASK_POLL_URL = os.getenv("TASK_POLL_URL", "")
-TASK_POLL_INTERVAL = int(os.getenv("TASK_POLL_INTERVAL", "5"))
-TASK_POLL_API_KEY = os.getenv("TASK_POLL_API_KEY", "")
-TASK_POLL_CALLBACK_URL = os.getenv("TASK_POLL_CALLBACK_URL", "")
-
 # 数据库配置（可选，用于持久化任务状态）
 DATABASE_URL = os.getenv("DATABASE_URL", "")  # PostgreSQL: postgresql+asyncpg://... 或 SQLite: sqlite+aiosqlite:///tasks.db
 
@@ -240,16 +233,9 @@ async def lifespan(app: FastAPI):
     """应用生命周期"""
     print(f"Claude Code Pool 启动，并发限制：{POOL_SIZE}")
     print(f"自动授权：{CLAUDE_AUTO_APPROVE}")
-    print(f"主动轮询：{TASK_POLL_ENABLED}")
 
     # 初始化数据库
     await init_database()
-
-    if TASK_POLL_ENABLED and TASK_POLL_URL:
-        print(f"轮询 URL: {TASK_POLL_URL}")
-        print(f"轮询间隔：{TASK_POLL_INTERVAL}秒")
-        # 启动后台轮询任务
-        asyncio.create_task(poll_loop())
 
     yield
 
@@ -425,150 +411,6 @@ async def execute_task(request: CustomTaskRequest):
 
         finally:
             active_tasks -= 1
-
-
-# ==================== 主动轮询模式 ====================
-
-async def poll_loop():
-    """主动轮询任务队列"""
-    print(f"启动轮询循环：每{TASK_POLL_INTERVAL}秒轮询一次")
-
-    while TASK_POLL_ENABLED:
-        try:
-            await poll_and_process_task()
-        except Exception as e:
-            print(f"轮询失败：{e}")
-
-        await asyncio.sleep(TASK_POLL_INTERVAL)
-
-
-async def poll_and_process_task():
-    """轮询并处理单个任务"""
-    if active_tasks >= POOL_SIZE:
-        print("并发任务数已达上限，跳过本次轮询")
-        return
-
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        headers = {}
-        if TASK_POLL_API_KEY:
-            headers["Authorization"] = f"Bearer {TASK_POLL_API_KEY}"
-
-        try:
-            # 获取待处理任务
-            response = await client.get(TASK_POLL_URL, headers=headers)
-            response.raise_for_status()
-
-            task_data = response.json()
-
-            # 如果没有待处理任务，直接返回
-            if not task_data or task_data.get("status") != "pending":
-                return
-
-            # 处理任务
-            await process_external_task(task_data)
-
-        except httpx.HTTPError as e:
-            print(f"轮询请求失败：{e}")
-        except Exception as e:
-            print(f"处理任务失败：{e}")
-
-
-async def process_external_task(task_data: dict):
-    """处理外部任务"""
-    task_id = task_data.get("id", str(uuid.uuid4())[:8])
-    task_type = task_data.get("type", "custom")
-    prompt = task_data.get("prompt", "")
-    target_dir = task_data.get("target_dir")
-    system_prompt = task_data.get("system_prompt", "")
-    skills = task_data.get("skills")
-    metadata = task_data.get("metadata", {})
-
-    # 创建任务记录
-    task_registry[task_id] = TaskRecord(
-        id=task_id,
-        task_type=task_type,
-        status="pending",
-        result={"external_data": task_data},
-    )
-
-    async with semaphore:
-        active_tasks += 1
-        task_registry[task_id].status = "running"
-        task_registry[task_id].started_at = time.time()
-
-        try:
-            # 确定目标目录
-            if not target_dir:
-                target_dir = os.path.join(OUTPUT_ROOT, f"task-{task_id}")
-
-            os.makedirs(target_dir, exist_ok=True)
-
-            # 加载 CLAUDE.md
-            claude_md_path = "/root/.claude/CLAUDE.md"
-            if os.path.exists(claude_md_path):
-                with open(claude_md_path, "r") as f:
-                    claude_md_content = f.read()
-                system_prompt = f"{system_prompt}\n\n## 项目规范\n{claude_md_content}"
-
-            # 执行任务
-            stdout, stderr = await run_claude_code_oneshot(
-                prompt=prompt,
-                target_dir=target_dir,
-                system_prompt=system_prompt,
-                auto_approve=True,
-                skills=skills,
-            )
-
-            # 更新状态
-            task_registry[task_id].status = "completed"
-            task_registry[task_id].completed_at = time.time()
-            task_registry[task_id].result = {
-                "stdout": stdout,
-                "stderr": stderr,
-                "target_dir": target_dir,
-                "metadata": metadata,
-            }
-
-            # 回调通知
-            await notify_task_completion(task_id, "completed")
-
-        except Exception as e:
-            task_registry[task_id].status = "failed"
-            task_registry[task_id].completed_at = time.time()
-            task_registry[task_id].error = str(e)
-            await notify_task_completion(task_id, "failed", str(e))
-
-        finally:
-            active_tasks -= 1
-
-
-async def notify_task_completion(task_id: str, status: str, error: Optional[str] = None):
-    """通知外部 API 任务完成"""
-    if not TASK_POLL_CALLBACK_URL:
-        return
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            headers = {}
-            if TASK_POLL_API_KEY:
-                headers["Authorization"] = f"Bearer {TASK_POLL_API_KEY}"
-
-            payload = {
-                "task_id": task_id,
-                "status": status,
-                "error": error,
-                "result": task_registry[task_id].result,
-            }
-
-            await client.post(
-                TASK_POLL_CALLBACK_URL,
-                json=payload,
-                headers=headers,
-            )
-            print(f"已通知任务完成：{task_id} -> {status}")
-
-    except Exception as e:
-        print(f"通知任务完成失败：{e}")
 
 
 # ==================== 任务执行器 ====================
