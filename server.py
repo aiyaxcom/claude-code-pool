@@ -26,6 +26,21 @@ from dataclasses import dataclass, field
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from pydantic import BaseModel
 
+# 数据库支持（可选）
+try:
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+    from sqlalchemy import Column, Integer, String, DateTime, Float, Text, Index
+    from sqlalchemy.orm import declarative_base
+    from datetime import datetime
+    DATABASE_AVAILABLE = True
+except ImportError:
+    DATABASE_AVAILABLE = False
+    create_async_engine = None
+    async_sessionmaker = None
+    AsyncSession = None
+    declarative_base = None
+    datetime = None
+
 
 # ==================== 配置 ====================
 
@@ -46,21 +61,55 @@ TASK_POLL_INTERVAL = int(os.getenv("TASK_POLL_INTERVAL", "5"))
 TASK_POLL_API_KEY = os.getenv("TASK_POLL_API_KEY", "")
 TASK_POLL_CALLBACK_URL = os.getenv("TASK_POLL_CALLBACK_URL", "")
 
+# 数据库配置（可选，用于持久化任务状态）
+DATABASE_URL = os.getenv("DATABASE_URL", "")  # PostgreSQL: postgresql+asyncpg://... 或 SQLite: sqlite+aiosqlite:///tasks.db
+
 # 信号量控制并发
 semaphore = asyncio.Semaphore(POOL_SIZE)
 
 # 当前活跃的任务计数
 active_tasks = 0
 
-# 任务执行记录（用于跟踪状态）
+# 任务执行记录（用于跟踪状态，内存缓存）
 task_registry: Dict[str, dict] = {}
+
+# 数据库引擎和会话工厂（可选）
+db_engine = None
+AsyncSessionLocal = None
 
 
 # ==================== 数据模型 ====================
 
+# SQLAlchemy Base
+if DATABASE_AVAILABLE:
+    Base = declarative_base()
+
+    class TaskModel(Base):
+        """任务数据库模型"""
+        __tablename__ = "tasks"
+
+        id = Column(Integer, primary_key=True, autoincrement=True)
+        task_id = Column(String(64), unique=True, nullable=False, index=True)
+        task_type = Column(String(32), default="custom")
+        status = Column(String(32), default="pending")  # pending, running, completed, failed
+        prompt = Column(Text, nullable=False)
+        target_dir = Column(String(512), nullable=True)
+        system_prompt = Column(Text, nullable=True)
+        result = Column(Text, nullable=True)  # JSON string
+        error = Column(Text, nullable=True)
+        created_at = Column(Float, default=time.time)
+        started_at = Column(Float, nullable=True)
+        completed_at = Column(Float, nullable=True)
+
+        __table_args__ = (
+            Index("idx_tasks_status", "status"),
+            Index("idx_tasks_task_id", "task_id"),
+        )
+
+
 @dataclass
 class TaskRecord:
-    """任务执行记录"""
+    """任务执行记录（内存）"""
     id: str
     task_type: str = "custom"
     status: str = "pending"  # pending, running, completed, failed
@@ -118,12 +167,83 @@ class ExecuteResponse(BaseModel):
 
 # ==================== 应用生命周期 ====================
 
+async def init_database():
+    """初始化数据库"""
+    global db_engine, AsyncSessionLocal
+
+    if not DATABASE_AVAILABLE or not DATABASE_URL:
+        print("数据库未启用，任务将仅保存在内存中（重启后丢失）")
+        return
+
+    try:
+        # 创建数据库引擎
+        db_engine = create_async_engine(DATABASE_URL, echo=False)
+
+        # 创建表
+        async with db_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        # 创建会话工厂
+        AsyncSessionLocal = async_sessionmaker(
+            bind=db_engine,
+            class_=AsyncSession,
+            expire_on_commit=False,
+        )
+
+        print(f"数据库已初始化：{DATABASE_URL}")
+
+        # 从数据库恢复未完成的任务
+        await recover_tasks_from_db()
+
+    except Exception as e:
+        print(f"数据库初始化失败：{e}，任务将仅保存在内存中")
+        db_engine = None
+        AsyncSessionLocal = None
+
+
+async def recover_tasks_from_db():
+    """从数据库恢复未完成的任务状态到内存"""
+    if not AsyncSessionLocal:
+        return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            # 查询所有未完成的任务
+            from sqlalchemy import select
+            result = await session.execute(
+                select(TaskModel).where(
+                    TaskModel.status.in_(["pending", "running"])
+                )
+            )
+            tasks = result.scalars().all()
+
+            for task in tasks:
+                # 恢复到内存 registry
+                task_registry[task.task_id] = TaskRecord(
+                    id=task.task_id,
+                    task_type=task.task_type,
+                    status=task.status,
+                    created_at=task.created_at,
+                    started_at=task.started_at,
+                    completed_at=task.completed_at,
+                    error=task.error,
+                )
+
+            print(f"从数据库恢复了 {len(tasks)} 个未完成的任务")
+
+    except Exception as e:
+        print(f"恢复任务失败：{e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期"""
     print(f"Claude Code Pool 启动，并发限制：{POOL_SIZE}")
     print(f"自动授权：{CLAUDE_AUTO_APPROVE}")
     print(f"主动轮询：{TASK_POLL_ENABLED}")
+
+    # 初始化数据库
+    await init_database()
 
     if TASK_POLL_ENABLED and TASK_POLL_URL:
         print(f"轮询 URL: {TASK_POLL_URL}")
@@ -205,6 +325,14 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
         task_type="custom",
         status="pending",
         result={"metadata": request.metadata},
+    )
+
+    # 保存到数据库
+    await save_task_to_db(
+        task_registry[task_id],
+        prompt=request.prompt,
+        target_dir=request.target_dir,
+        system_prompt=request.system_prompt,
     )
 
     # 在后台执行任务
@@ -459,6 +587,9 @@ async def execute_custom_task(
         task_registry[task_id].status = "running"
         task_registry[task_id].started_at = time.time()
 
+        # 更新数据库状态
+        await save_task_to_db(task_registry[task_id])
+
         try:
             if not target_dir:
                 target_dir = OUTPUT_ROOT
@@ -486,14 +617,21 @@ async def execute_custom_task(
                 "stderr": stderr,
                 "target_dir": target_dir,
             }
+            task_registry[task_id].completed_at = time.time()
+
+            # 更新数据库状态
+            await save_task_to_db(task_registry[task_id])
 
         except Exception as e:
             task_registry[task_id].status = "failed"
             task_registry[task_id].error = str(e)
+            task_registry[task_id].completed_at = time.time()
+
+            # 更新数据库状态
+            await save_task_to_db(task_registry[task_id])
 
         finally:
             active_tasks -= 1
-            task_registry[task_id].completed_at = time.time()
 
 
 # ==================== Claude Code CLI 执行 ====================
@@ -582,6 +720,67 @@ async def find_claude_command() -> Optional[str]:
 
 
 # ==================== 工具函数 ====================
+
+async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir: str = "", system_prompt: str = ""):
+    """保存任务到数据库"""
+    if not AsyncSessionLocal:
+        return
+
+    try:
+        async with AsyncSessionLocal() as session:
+            # 检查是否已存在
+            from sqlalchemy import select
+            result = await session.execute(
+                select(TaskModel).where(TaskModel.task_id == task_record.id)
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # 更新
+                existing.status = task_record.status
+                existing.started_at = task_record.started_at
+                existing.completed_at = task_record.completed_at
+                existing.error = task_record.error
+                if task_record.result:
+                    existing.result = json.dumps(task_record.result)
+            else:
+                # 新建
+                new_task = TaskModel(
+                    task_id=task_record.id,
+                    task_type=task_record.task_type,
+                    status=task_record.status,
+                    prompt=prompt,
+                    target_dir=target_dir,
+                    system_prompt=system_prompt,
+                    created_at=task_record.created_at,
+                    started_at=task_record.started_at,
+                    completed_at=task_record.completed_at,
+                    error=task_record.error,
+                    result=json.dumps(task_record.result) if task_record.result else None,
+                )
+                session.add(new_task)
+
+            await session.commit()
+
+    except Exception as e:
+        print(f"保存任务到数据库失败：{e}")
+
+
+async def get_task_from_db(task_id: str) -> Optional[TaskModel]:
+    """从数据库获取任务"""
+    if not AsyncSessionLocal:
+        return None
+
+    try:
+        async with AsyncSessionLocal() as session:
+            from sqlalchemy import select
+            result = await session.execute(
+                select(TaskModel).where(TaskModel.task_id == task_id)
+            )
+            return result.scalar_one_or_none()
+    except Exception:
+        return None
+
 
 def verify_output(target_dir: str, max_size: int = 10 * 1024 * 1024) -> bool:
     """验证输出文件"""
