@@ -26,7 +26,7 @@ jobs:
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: aiyax/claude-code-pool
+        images: ${{ secrets.DOCKERHUB_USERNAME }}/claude-code-pool
         tags: |
           type=ref,event=branch
           type=semver,pattern={{version}}
