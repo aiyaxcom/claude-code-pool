@@ -409,6 +409,8 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
     """
     task_id = request.task_id or str(uuid.uuid4())[:8]
 
+    print(f"[DEBUG] 创建任务：task_id={task_id}")
+
     task_registry[task_id] = TaskRecord(
         id=task_id,
         task_type="custom",
@@ -434,6 +436,8 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
         auto_approve=request.auto_approve,
         skills=request.skills,
     )
+
+    print(f"[DEBUG] 任务已创建并加入后台执行：task_id={task_id}")
 
     return TaskResponse(
         task_id=task_id,
@@ -719,6 +723,7 @@ async def broadcast_output(task_id: str, output_type: str, data: str):
 async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir: str = "", system_prompt: str = ""):
     """保存任务到数据库"""
     if not AsyncSessionLocal:
+        print(f"[DEBUG] 数据库未初始化，任务仅保存在内存中：task_id={task_record.id}")
         return
 
     try:
@@ -738,6 +743,7 @@ async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir:
                 existing.error = task_record.error
                 if task_record.result:
                     existing.result = json.dumps(task_record.result)
+                print(f"[DEBUG] 更新数据库任务：task_id={task_record.id}, status={task_record.status}")
             else:
                 # 新建
                 new_task = TaskModel(
@@ -754,8 +760,13 @@ async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir:
                     result=json.dumps(task_record.result) if task_record.result else None,
                 )
                 session.add(new_task)
+                print(f"[DEBUG] 新建数据库任务：task_id={task_record.id}, prompt={prompt[:50]}...")
 
             await session.commit()
+            print(f"[DEBUG] 数据库提交成功：task_id={task_record.id}")
+
+    except Exception as e:
+        print(f"[ERROR] 保存任务到数据库失败：task_id={task_record.id}, error={e}")
 
     except Exception as e:
         print(f"保存任务到数据库失败：{e}")
