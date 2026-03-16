@@ -95,6 +95,25 @@ ANTHROPIC_BASE_URL=https://api.anthropic.com
 ANTHROPIC_MODEL=claude-sonnet-4-5
 ```
 
+### 使用国产大模型（如通义千问）
+
+本项目支持使用兼容 OpenAI API 格式的国产大模型：
+
+```bash
+# 通义千问（阿里云百炼）
+# 官网：https://www.aliyun.com/product/bailian
+ANTHROPIC_AUTH_TOKEN=sk-xxxxx
+ANTHROPIC_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+ANTHROPIC_MODEL=qwen-plus
+
+# 或 DeepSeek
+ANTHROPIC_AUTH_TOKEN=sk-xxxxx
+ANTHROPIC_BASE_URL=https://api.deepseek.com
+ANTHROPIC_MODEL=deepseek-chat
+```
+
+**注意**：需要确保模型支持 OpenAI API 兼容模式
+
 ### 2. 使用 Docker Compose 启动
 
 ```bash
