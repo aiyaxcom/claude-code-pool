@@ -23,7 +23,8 @@ from typing import Optional, Dict, List, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 # 数据库支持（可选）
@@ -68,6 +69,9 @@ task_registry: Dict[str, dict] = {}
 
 # WebSocket 连接管理（用于流式输出任务进度）
 task_websockets: Dict[str, List[WebSocket]] = {}
+
+# 任务输出日志存储（用于 SSE/轮询）
+task_outputs: Dict[str, List[dict]] = {}
 
 # 数据库引擎和会话工厂（可选）
 db_engine = None
@@ -317,20 +321,9 @@ async def websocket_task_output(websocket: WebSocket, task_id: str):
     task_websockets[task_id].append(websocket)
 
     # 发送历史输出（如果有）
-    if task_id in task_registry:
-        record = task_registry[task_id]
-        if record.result and record.result.get("stdout"):
-            await websocket.send_json({
-                "type": "output",
-                "data": record.result["stdout"],
-                "source": "stdout"
-            })
-        if record.result and record.result.get("stderr"):
-            await websocket.send_json({
-                "type": "output",
-                "data": record.result["stderr"],
-                "source": "stderr"
-            })
+    if task_id in task_outputs:
+        for output in task_outputs[task_id]:
+            await websocket.send_json(output)
 
     try:
         # 保持连接，接收客户端消息
@@ -347,6 +340,64 @@ async def websocket_task_output(websocket: WebSocket, task_id: str):
             task_websockets[task_id] = [ws for ws in task_websockets[task_id] if ws != websocket]
             if not task_websockets[task_id]:
                 del task_websockets[task_id]
+
+
+@app.get("/tasks/{task_id}/output")
+async def get_task_output(task_id: str, last_id: int = 0):
+    """获取任务输出日志（支持轮询）"""
+    if task_id not in task_registry:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    outputs = task_outputs.get(task_id, [])
+
+    # 返回所有输出或只返回新增的输出
+    if last_id > 0:
+        outputs = outputs[last_id:]
+
+    return {
+        "task_id": task_id,
+        "outputs": outputs,
+        "total": len(task_outputs.get(task_id, []))
+    }
+
+
+@app.get("/tasks/{task_id}/stream")
+async def stream_task_output(task_id: str, request: Request):
+    """SSE 流式输出任务日志"""
+    if task_id not in task_registry:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    async def generate():
+        last_id = 0
+        while True:
+            # 检查客户端是否断开连接
+            if await request.is_disconnected():
+                break
+
+            outputs = task_outputs.get(task_id, [])
+            if last_id < len(outputs):
+                new_outputs = outputs[last_id:]
+                for output in new_outputs:
+                    yield f"data: {json.dumps(output)}\n\n"
+                last_id = len(outputs)
+
+            # 如果任务已完成，发送结束标志并断开
+            record = task_registry.get(task_id)
+            if record and record.status in ["completed", "failed"]:
+                yield f"data: {json.dumps({'type': 'done', 'status': record.status})}\n\n"
+                break
+
+            # 等待一段时间后继续轮询
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @app.post("/task", response_model=TaskResponse)
@@ -640,7 +691,18 @@ async def find_claude_command() -> Optional[str]:
 # ==================== 工具函数 ====================
 
 async def broadcast_output(task_id: str, output_type: str, data: str):
-    """广播任务输出到所有连接的 WebSocket"""
+    """广播任务输出到所有连接的 WebSocket 并存储日志"""
+    # 存储输出日志
+    if task_id not in task_outputs:
+        task_outputs[task_id] = []
+    task_outputs[task_id].append({
+        "type": "output",
+        "source": output_type,
+        "data": data,
+        "timestamp": datetime.utcnow().isoformat()
+    })
+
+    # 广播到 WebSocket
     if task_id in task_websockets:
         message = {
             "type": "output",
