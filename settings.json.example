@@ -1,0 +1,41 @@
+{
+  "allowedTools": [
+    "Read",
+    "Write",
+    "Edit",
+    "Bash",
+    "Glob",
+    "Grep",
+    "Task",
+    "WebFetch",
+    "WebSearch"
+  ],
+  "autoApprove": {
+    "enabled": true,
+    "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+    "commands": ["ls", "cat", "head", "tail", "grep", "find", "mkdir", "cp", "mv", "git status", "git diff", "git log", "wc", "du"]
+  },
+  "model": {
+    "maxTokens": 8192,
+    "temperature": 0.7
+  },
+  "telemetry": {
+    "enabled": false
+  },
+  "permissions": {
+    "write": true,
+    "execute": true,
+    "network": true
+  },
+  "env": {
+    "WORKSPACE_ROOT": "/workspace"
+  },
+  "_notes": {
+    "description": "敏感信息（ANTHROPIC_*）请通过环境变量或 .env 文件配置，不要写入此文件",
+    "env_vars": [
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_MODEL"
+    ]
+  }
+}

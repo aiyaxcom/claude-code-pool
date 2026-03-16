@@ -1,0 +1,51 @@
+# Claude Code Pool - Docker Compose 示例
+
+# 基础配置 - 单实例
+services:
+  claude-code-pool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: claude-code-pool
+    restart: always
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Claude API 配置（从 .env 文件读取）
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-https://api.anthropic.com}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      # 服务配置
+      - POOL_SIZE=3
+      - CLAUDE_TIMEOUT=300
+      - CLAUDE_AUTO_APPROVE=all
+      # 目录配置
+      - WORKSPACE_ROOT=/workspace
+      - OUTPUT_ROOT=/sites
+      # 主动轮询模式配置（可选）
+      # - TASK_POLL_ENABLED=true
+      # - TASK_POLL_URL=https://your-api.com/api/tasks
+      # - TASK_POLL_INTERVAL=5
+      # - TASK_POLL_API_KEY=your-api-key
+      # - TASK_POLL_CALLBACK_URL=https://your-api.com/api/tasks/callback
+    volumes:
+      # 输出目录
+      - ./output:/sites
+      # Claude 配置映射
+      - ./settings.json:/root/.claude/settings.json:ro
+      # Skills 目录映射（可选）
+      # - ./skills:/root/.claude/skills:ro
+      # 全局 CLAUDE.md 映射（可选）
+      # - ./CLAUDE.md:/root/.claude/CLAUDE.md:ro
+    networks:
+      - claude-network
+
+networks:
+  claude-network:
+    driver: bridge
+
+volumes:
+  output:
+    driver: local
