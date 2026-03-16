@@ -23,13 +23,13 @@ from typing import Optional, Dict, List, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel
 
 # 数据库支持（可选）
 try:
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-    from sqlalchemy import Column, Integer, String, DateTime, Float, Text, Index
+    from sqlalchemy import Column, Integer, String, DateTime, Text, Index
     from sqlalchemy.orm import declarative_base
     from datetime import datetime
     DATABASE_AVAILABLE = True
@@ -66,6 +66,9 @@ active_tasks = 0
 # 任务执行记录（用于跟踪状态，内存缓存）
 task_registry: Dict[str, dict] = {}
 
+# WebSocket 连接管理（用于流式输出任务进度）
+task_websockets: Dict[str, List[WebSocket]] = {}
+
 # 数据库引擎和会话工厂（可选）
 db_engine = None
 AsyncSessionLocal = None
@@ -90,9 +93,9 @@ if DATABASE_AVAILABLE:
         system_prompt = Column(Text, nullable=True)
         result = Column(Text, nullable=True)  # JSON string
         error = Column(Text, nullable=True)
-        created_at = Column(Float, default=time.time)
-        started_at = Column(Float, nullable=True)
-        completed_at = Column(Float, nullable=True)
+        created_at = Column(DateTime, default=datetime.utcnow)
+        started_at = Column(DateTime, nullable=True)
+        completed_at = Column(DateTime, nullable=True)
 
         __table_args__ = (
             Index("idx_tasks_status", "status"),
@@ -106,9 +109,9 @@ class TaskRecord:
     id: str
     task_type: str = "custom"
     status: str = "pending"  # pending, running, completed, failed
-    created_at: float = field(default_factory=time.time)
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     result: Optional[dict] = None
     error: Optional[str] = None
 
@@ -118,7 +121,6 @@ class StatusResponse(BaseModel):
     pool_size: int
     active_tasks: int
     available_slots: int
-    poll_enabled: bool
 
 
 class TaskStatusResponse(BaseModel):
@@ -126,10 +128,15 @@ class TaskStatusResponse(BaseModel):
     id: str
     task_type: str
     status: str
-    created_at: float
-    started_at: Optional[float] = None
-    completed_at: Optional[float] = None
+    created_at: datetime
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     error: Optional[str] = None
+
+    class Config:
+        json_encoders = {
+            datetime: lambda v: v.isoformat() if v else None
+        }
 
 
 class CustomTaskRequest(BaseModel):
@@ -259,7 +266,6 @@ async def get_status():
         pool_size=POOL_SIZE,
         active_tasks=active_tasks,
         available_slots=POOL_SIZE - active_tasks,
-        poll_enabled=TASK_POLL_ENABLED,
     )
 
 
@@ -295,6 +301,52 @@ async def get_task(task_id: str):
         completed_at=record.completed_at,
         error=record.error,
     )
+
+
+@app.websocket("/ws/tasks/{task_id}")
+async def websocket_task_output(websocket: WebSocket, task_id: str):
+    """
+    WebSocket 连接查看任务输出进度
+    连接到特定任务的实时输出流
+    """
+    await websocket.accept()
+
+    # 将连接添加到任务连接列表
+    if task_id not in task_websockets:
+        task_websockets[task_id] = []
+    task_websockets[task_id].append(websocket)
+
+    # 发送历史输出（如果有）
+    if task_id in task_registry:
+        record = task_registry[task_id]
+        if record.result and record.result.get("stdout"):
+            await websocket.send_json({
+                "type": "output",
+                "data": record.result["stdout"],
+                "source": "stdout"
+            })
+        if record.result and record.result.get("stderr"):
+            await websocket.send_json({
+                "type": "output",
+                "data": record.result["stderr"],
+                "source": "stderr"
+            })
+
+    try:
+        # 保持连接，接收客户端消息
+        while True:
+            data = await websocket.receive_text()
+            # 可以处理客户端发来的命令，比如停止任务
+            if data == "stop":
+                await websocket.send_json({"type": "info", "data": "收到停止请求"})
+    except WebSocketDisconnect:
+        pass
+    finally:
+        # 连接关闭时从列表中移除
+        if task_id in task_websockets:
+            task_websockets[task_id] = [ws for ws in task_websockets[task_id] if ws != websocket]
+            if not task_websockets[task_id]:
+                del task_websockets[task_id]
 
 
 @app.post("/task", response_model=TaskResponse)
@@ -357,7 +409,7 @@ async def execute_task(request: CustomTaskRequest):
     async with semaphore:
         active_tasks += 1
         task_registry[task_id].status = "running"
-        task_registry[task_id].started_at = time.time()
+        task_registry[task_id].started_at = datetime.utcnow()
 
         try:
             # 确定目标目录
@@ -382,11 +434,12 @@ async def execute_task(request: CustomTaskRequest):
                 system_prompt=system_prompt,
                 auto_approve=request.auto_approve,
                 skills=request.skills,
+                task_id=task_id,
             )
 
             # 更新状态
             task_registry[task_id].status = "completed"
-            task_registry[task_id].completed_at = time.time()
+            task_registry[task_id].completed_at = datetime.utcnow()
             task_registry[task_id].result = {
                 "stdout": stdout,
                 "stderr": stderr,
@@ -401,7 +454,7 @@ async def execute_task(request: CustomTaskRequest):
 
         except Exception as e:
             task_registry[task_id].status = "failed"
-            task_registry[task_id].completed_at = time.time()
+            task_registry[task_id].completed_at = datetime.utcnow()
             task_registry[task_id].error = str(e)
             return ExecuteResponse(
                 success=False,
@@ -427,7 +480,7 @@ async def execute_custom_task(
     async with semaphore:
         active_tasks += 1
         task_registry[task_id].status = "running"
-        task_registry[task_id].started_at = time.time()
+        task_registry[task_id].started_at = datetime.utcnow()
 
         # 更新数据库状态
         await save_task_to_db(task_registry[task_id])
@@ -451,6 +504,7 @@ async def execute_custom_task(
                 system_prompt=system_prompt or "",
                 auto_approve=auto_approve,
                 skills=skills,
+                task_id=task_id,
             )
 
             task_registry[task_id].status = "completed"
@@ -459,7 +513,7 @@ async def execute_custom_task(
                 "stderr": stderr,
                 "target_dir": target_dir,
             }
-            task_registry[task_id].completed_at = time.time()
+            task_registry[task_id].completed_at = datetime.utcnow()
 
             # 更新数据库状态
             await save_task_to_db(task_registry[task_id])
@@ -467,7 +521,7 @@ async def execute_custom_task(
         except Exception as e:
             task_registry[task_id].status = "failed"
             task_registry[task_id].error = str(e)
-            task_registry[task_id].completed_at = time.time()
+            task_registry[task_id].completed_at = datetime.utcnow()
 
             # 更新数据库状态
             await save_task_to_db(task_registry[task_id])
@@ -485,6 +539,7 @@ async def run_claude_code_oneshot(
     auto_approve: bool = True,
     skills: Optional[List[str]] = None,
     timeout: int = CLAUDE_TIMEOUT,
+    task_id: Optional[str] = None,
 ) -> tuple:
     """运行 Claude Code CLI（一次性执行模式，自动授权）"""
     claude_cmd = await find_claude_command()
@@ -531,11 +586,32 @@ async def run_claude_code_oneshot(
     system_message = f"{system_prompt}\n\n---\n\n{prompt}\n\n---\n\n请开始执行任务，不要等待确认，直接完成所有工作。"
 
     try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(input=system_message.encode()),
-            timeout=timeout,
+        # 流式读取输出
+        stdout_chunks = []
+        stderr_chunks = []
+
+        async def read_stream(stream, output_type):
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                chunk = line.decode()
+                stdout_chunks.append(chunk) if output_type == "stdout" else stderr_chunks.append(chunk)
+                # 广播输出到 WebSocket
+                if task_id:
+                    await broadcast_output(task_id, output_type, chunk)
+
+        # 并发读取 stdout 和 stderr
+        await asyncio.gather(
+            read_stream(process.stdout, "stdout"),
+            read_stream(process.stderr, "stderr"),
         )
-        return stdout.decode(), stderr.decode()
+
+        # 等待进程结束
+        await process.wait()
+
+        return "".join(stdout_chunks), "".join(stderr_chunks)
+
     except asyncio.TimeoutError:
         process.kill()
         raise TimeoutError(f"Claude Code 执行超时（{timeout}秒）")
@@ -562,6 +638,21 @@ async def find_claude_command() -> Optional[str]:
 
 
 # ==================== 工具函数 ====================
+
+async def broadcast_output(task_id: str, output_type: str, data: str):
+    """广播任务输出到所有连接的 WebSocket"""
+    if task_id in task_websockets:
+        message = {
+            "type": "output",
+            "data": data,
+            "source": output_type
+        }
+        for ws in task_websockets[task_id]:
+            try:
+                await ws.send_json(message)
+            except Exception:
+                pass  # 忽略发送失败的连接
+
 
 async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir: str = "", system_prompt: str = ""):
     """保存任务到数据库"""
