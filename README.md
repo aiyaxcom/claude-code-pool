@@ -1,5 +1,10 @@
 # Claude Code Pool
 
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Docker](https://img.shields.io/badge/docker-latest-blue?logo=docker)
+![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
+![CI/CD](https://img.shields.io/github/actions/workflow/status/aiyaxcom/claude-code-pool/docker-image.yml?branch=main&label=build)
+
 Claude Code Pool 是一个基于 Claude Code CLI 的服务池管理系统，支持并发控制、自动授权和任务队列。
 
 ## 功能特性
