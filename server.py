@@ -489,36 +489,6 @@ async def get_task_detail(task_id: str):
         "output_count": len(outputs),
         "metadata": record.result.get("metadata", {}) if record.result else None,
     }
-                )
-                task = result.scalar_one_or_none()
-
-                if task:
-                    # 恢复到内存
-                    record = TaskRecord(
-                        id=task.task_id,
-                        task_type=task.task_type,
-                        status=task.status,
-                        created_at=task.created_at,
-                        started_at=task.started_at,
-                        completed_at=task.completed_at,
-                        error=task.error,
-                    )
-                    task_registry[task_id] = record
-                    print(f"[DEBUG] 从数据库恢复任务到内存：task_id={task_id}")
-
-                    return TaskStatusResponse(
-                        id=record.id,
-                        task_type=record.task_type,
-                        status=record.status,
-                        created_at=record.created_at,
-                        started_at=record.started_at,
-                        completed_at=record.completed_at,
-                        error=record.error,
-                    )
-        except Exception as e:
-            print(f"[ERROR] 从数据库获取任务失败：{e}")
-
-    raise HTTPException(status_code=404, detail="任务不存在")
 
 
 @app.websocket("/ws/tasks/{task_id}")
