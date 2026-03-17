@@ -431,6 +431,68 @@ async def get_task(task_id: str):
                 task = result.scalar_one_or_none()
 
                 if task:
+                    return TaskStatusResponse(
+                        id=task.task_id,
+                        task_type=task.task_type,
+                        status=task.status,
+                        created_at=task.created_at,
+                        started_at=task.started_at,
+                        completed_at=task.completed_at,
+                        error=task.error,
+                    )
+        except Exception as e:
+            print(f"获取任务失败：{e}")
+
+    raise HTTPException(status_code=404, detail="任务不存在")
+
+
+@app.get("/tasks/{task_id}/detail")
+async def get_task_detail(task_id: str):
+    """获取单个任务详细信息（包括当前执行状态）"""
+    if task_id not in task_registry:
+        raise HTTPException(status_code=404, detail="任务不存在")
+
+    record = task_registry[task_id]
+    outputs = task_outputs.get(task_id, [])
+
+    # 获取最近的输出，分析当前正在做什么
+    current_activity = None
+    recent_activities = []
+
+    for output in reversed(outputs[-10:]):  # 查看最近 10 条输出
+        if output.get("subagent_status"):
+            recent_activities.append({
+                "status": output["subagent_status"],
+                "timestamp": output.get("timestamp"),
+            })
+            if not current_activity:
+                current_activity = output["subagent_status"]
+
+    # 根据任务状态和输出分析当前活动
+    activity_summary = current_activity or "等待执行"
+    if record.status == "running" and outputs:
+        # 分析最近的工具调用
+        last_output = outputs[-1] if outputs else None
+        if last_output:
+            activity_summary = f"正在执行 - {last_output.get('subagent_status', '处理中')}"
+
+    return {
+        "id": record.id,
+        "task_type": record.task_type,
+        "status": record.status,
+        "created_at": record.created_at.isoformat() if record.created_at else None,
+        "started_at": record.started_at.isoformat() if record.started_at else None,
+        "completed_at": record.completed_at.isoformat() if record.completed_at else None,
+        "error": record.error,
+        "current_activity": activity_summary,
+        "recent_activities": recent_activities[:5],  # 最近 5 个活动
+        "output_count": len(outputs),
+        "metadata": record.result.get("metadata", {}) if record.result else None,
+    }
+                )
+                task = result.scalar_one_or_none()
+
+                if task:
                     # 恢复到内存
                     record = TaskRecord(
                         id=task.task_id,
@@ -895,20 +957,63 @@ async def broadcast_output(task_id: str, output_type: str, data: str):
     # 存储输出日志
     if task_id not in task_outputs:
         task_outputs[task_id] = []
-    task_outputs[task_id].append({
+
+    # 尝试解析 JSON 输出（stream-json 格式）
+    parsed_data = None
+    display_text = data
+    subagent_status = None
+
+    if output_type == "stdout" and data.strip().startswith("{"):
+        try:
+            json_data = json.loads(data.strip())
+            # 提取有用信息
+            if isinstance(json_data, dict):
+                # 检测消息类型
+                msg_type = json_data.get("type")
+                if msg_type == "system":
+                    # 系统消息
+                    subagent_status = json_data.get("message", "")
+                elif msg_type == "tool_use":
+                    # 工具调用
+                    tool_name = json_data.get("name", "unknown")
+                    subagent_status = f"正在调用工具：{tool_name}"
+                elif msg_type == "tool_result":
+                    # 工具结果
+                    subagent_status = "工具调用完成"
+                elif msg_type == "assistant":
+                    # 助手消息
+                    content = json_data.get("content", "")
+                    if content:
+                        display_text = content[:200]  # 限制长度
+                elif msg_type == "user":
+                    # 用户消息
+                    subagent_status = "处理用户输入"
+        except json.JSONDecodeError:
+            pass
+
+    # 构建输出记录
+    output_record = {
         "type": "output",
         "source": output_type,
-        "data": data,
-        "timestamp": get_local_datetime().isoformat()
-    })
+        "data": display_text,
+        "timestamp": get_local_datetime().isoformat(),
+    }
+
+    # 如果有子代理状态，添加到记录
+    if subagent_status:
+        output_record["subagent_status"] = subagent_status
+
+    task_outputs[task_id].append(output_record)
 
     # 广播到 WebSocket
     if task_id in task_websockets:
         message = {
             "type": "output",
-            "data": data,
-            "source": output_type
+            "data": display_text,
+            "source": output_type,
         }
+        if subagent_status:
+            message["subagent_status"] = subagent_status
         for ws in task_websockets[task_id]:
             try:
                 await ws.send_json(message)
