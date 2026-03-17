@@ -747,8 +747,8 @@ async def run_claude_code_oneshot(
     cmd = [
         claude_cmd,
         "-p",  # 非交互式输出
-        "--allowedTools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
-        "--outputFormat", "stream",
+        "--allowed-tools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
+        "--output-format", "stream",
         "--continue",
     ]
 
