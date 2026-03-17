@@ -263,8 +263,15 @@ async def init_database():
         # 先执行数据库迁移（修复时间戳字段类型）
         await migrate_database_schema()
 
-        # 创建数据库引擎
-        db_engine = create_async_engine(DATABASE_URL, echo=False)
+        # 创建数据库引擎（添加连接池配置）
+        db_engine = create_async_engine(
+            DATABASE_URL,
+            echo=False,
+            pool_size=10,  # 连接池大小
+            max_overflow=20,  # 最大溢出连接数
+            pool_pre_ping=True,  # 连接前 ping 测试，自动回收无效连接
+            pool_recycle=3600,  # 1 小时后回收连接
+        )
 
         # 创建表
         async with db_engine.begin() as conn:
@@ -493,16 +500,21 @@ async def get_task_output(task_id: str, last_id: int = 0):
     if task_id not in task_registry:
         raise HTTPException(status_code=404, detail="任务不存在")
 
+    record = task_registry[task_id]
     outputs = task_outputs.get(task_id, [])
 
     # 返回所有输出或只返回新增的输出
     if last_id > 0:
         outputs = outputs[last_id:]
 
+    # 添加调试日志
+    print(f"[DEBUG] 获取任务输出：task_id={task_id}, status={record.status}, total_outputs={len(task_outputs.get(task_id, []))}, last_id={last_id}, returning={len(outputs)}")
+
     return {
         "task_id": task_id,
         "outputs": outputs,
-        "total": len(task_outputs.get(task_id, []))
+        "total": len(task_outputs.get(task_id, [])),
+        "task_status": record.status,  # 添加任务状态
     }
 
 
@@ -950,10 +962,17 @@ async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir:
             print(f"[DEBUG] 数据库提交成功：task_id={task_record.id}")
 
     except Exception as e:
-        print(f"[ERROR] 保存任务到数据库失败：task_id={task_record.id}, error={e}")
-
-    except Exception as e:
-        print(f"保存任务到数据库失败：{e}")
+        # 连接错误时尝试重新初始化
+        error_str = str(e)
+        if "connection is closed" in error_str or "connection failed" in error_str.lower():
+            print(f"[ERROR] 数据库连接断开，尝试重新初始化：{e}")
+            # 关闭旧引擎
+            if db_engine:
+                await db_engine.dispose()
+            # 重新初始化数据库
+            await init_database()
+        else:
+            print(f"[ERROR] 保存任务到数据库失败：task_id={task_record.id}, error={e}")
 
 
 async def get_task_from_db(task_id: str) -> Optional[TaskModel]:
