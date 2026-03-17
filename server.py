@@ -630,8 +630,16 @@ async def execute_task(request: CustomTaskRequest):
                 task_id=task_id,
             )
 
-            # 更新状态
-            task_registry[task_id].status = "completed"
+            # 检查是否有错误（stderr 非空说明 CLI 执行失败）
+            if stderr and stderr.strip():
+                print(f"[ERROR] 任务执行出错：{stderr[:500]}")
+                task_registry[task_id].status = "failed"
+                task_registry[task_id].error = stderr[:2000]
+                task_status = "failed"
+            else:
+                task_registry[task_id].status = "completed"
+                task_status = "completed"
+
             task_registry[task_id].completed_at = datetime.utcnow()
             task_registry[task_id].result = {
                 "stdout": stdout,
@@ -640,9 +648,10 @@ async def execute_task(request: CustomTaskRequest):
             }
 
             return ExecuteResponse(
-                success=True,
-                message="任务执行完成",
+                success=task_status == "completed",
+                message="任务执行完成" if task_status == "completed" else f"任务执行失败：{stderr[:200]}",
                 output=stdout[:2000] if stdout else None,
+                error=stderr[:2000] if stderr else None,
             )
 
         except Exception as e:
@@ -702,7 +711,14 @@ async def execute_custom_task(
                 task_id=task_id,
             )
 
-            task_registry[task_id].status = "completed"
+            # 检查是否有错误（stderr 非空说明 CLI 执行失败）
+            if stderr and stderr.strip():
+                print(f"[ERROR] 任务执行出错：{stderr[:500]}")
+                task_registry[task_id].status = "failed"
+                task_registry[task_id].error = stderr[:2000]  # 限制错误信息长度
+            else:
+                task_registry[task_id].status = "completed"
+
             task_registry[task_id].result = {
                 "stdout": stdout,
                 "stderr": stderr,
@@ -748,7 +764,7 @@ async def run_claude_code_oneshot(
         claude_cmd,
         "-p",  # 非交互式输出
         "--allowed-tools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
-        "--output-format", "stream",
+        "--output-format", "stream-json",  # 流式 JSON 输出
         "--continue",
     ]
 
