@@ -171,6 +171,77 @@ class ExecuteResponse(BaseModel):
 
 # ==================== 应用生命周期 ====================
 
+async def migrate_database_schema():
+    """迁移数据库 schema - 修复时间戳字段类型"""
+    if not DATABASE_AVAILABLE or not DATABASE_URL:
+        return
+
+    try:
+        db_engine = create_async_engine(DATABASE_URL, echo=False)
+
+        # 检查是否需要迁移（检查 tasks 表的 started_at 字段类型）
+        async with db_engine.begin() as conn:
+            # 使用 raw SQL 检查列类型
+            from sqlalchemy import text
+            result = await conn.execute(text("""
+                SELECT column_name, data_type
+                FROM information_schema.columns
+                WHERE table_name = 'tasks'
+                AND column_name IN ('started_at', 'completed_at', 'created_at')
+                ORDER BY column_name
+            """))
+            columns = result.fetchall()
+
+            # 检查是否是 float8/double precision 类型
+            needs_migration = False
+            for col_name, data_type in columns:
+                if data_type in ('double precision', 'float8'):
+                    needs_migration = True
+                    print(f"[MIGRATE] 检测到字段 {col_name} 类型为 {data_type}，需要迁移")
+
+            if needs_migration:
+                print("[MIGRATE] 开始迁移时间戳字段类型...")
+
+                # 执行迁移
+                await conn.execute(text("""
+                    ALTER TABLE tasks
+                    ALTER COLUMN started_at TYPE TIMESTAMP
+                    USING CASE
+                        WHEN started_at IS NOT NULL THEN TO_TIMESTAMP(started_at)
+                        ELSE NULL
+                    END
+                """))
+
+                await conn.execute(text("""
+                    ALTER TABLE tasks
+                    ALTER COLUMN completed_at TYPE TIMESTAMP
+                    USING CASE
+                        WHEN completed_at IS NOT NULL THEN TO_TIMESTAMP(completed_at)
+                        ELSE NULL
+                    END
+                """))
+
+                await conn.execute(text("""
+                    ALTER TABLE tasks
+                    ALTER COLUMN created_at TYPE TIMESTAMP
+                    USING TO_TIMESTAMP(created_at)
+                """))
+
+                await conn.execute(text("""
+                    ALTER TABLE tasks
+                    ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP
+                """))
+
+                print("[MIGRATE] 时间戳字段迁移完成")
+            else:
+                print("[MIGRATE] 数据库 schema 已是最新，无需迁移")
+
+        await db_engine.dispose()
+
+    except Exception as e:
+        print(f"[MIGRATE] 迁移失败：{e}，将继续尝试初始化数据库")
+
+
 async def init_database():
     """初始化数据库"""
     global db_engine, AsyncSessionLocal
@@ -180,6 +251,9 @@ async def init_database():
         return
 
     try:
+        # 先执行数据库迁移（修复时间戳字段类型）
+        await migrate_database_schema()
+
         # 创建数据库引擎
         db_engine = create_async_engine(DATABASE_URL, echo=False)
 
