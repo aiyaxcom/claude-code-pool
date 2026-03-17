@@ -83,8 +83,8 @@ TZ_LOCAL = timezone(timedelta(hours=TIMEZONE_OFFSET))
 
 
 def get_local_datetime() -> datetime:
-    """获取本地时区当前时间"""
-    return datetime.now(TZ_LOCAL)
+    """获取本地时区当前时间（无时区信息，适配 PostgreSQL TIMESTAMP WITHOUT TIME ZONE）"""
+    return datetime.now(TZ_LOCAL).replace(tzinfo=None)
 
 
 # ==================== 数据模型 ====================
