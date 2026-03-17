@@ -779,10 +779,12 @@ async def run_claude_code_oneshot(
     #     elif CLAUDE_AUTO_APPROVE == "selective":
     #         cmd.extend(["--approve-tools", "Read,Write,Edit,Bash,Glob,Grep"])
 
-    # 加载 skills
-    if skills:
-        for skill in skills:
-            cmd.extend(["--skill", skill])
+    # 注意：新版 CLI 没有 --skill 参数
+    # Skills 通过 settings.json 配置文件加载：
+    # /root/.claude/settings.json 中的 "skills" 配置项
+    # if skills:
+    #     for skill in skills:
+    #         cmd.extend(["--skill", skill])
 
     print(f"[OneShot] 执行 Claude 命令，target_dir={target_dir}")
 
