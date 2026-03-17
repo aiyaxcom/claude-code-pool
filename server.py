@@ -223,15 +223,27 @@ async def recover_tasks_from_db():
 
             for task in tasks:
                 # 恢复到内存 registry
-                task_registry[task.task_id] = TaskRecord(
+                record = TaskRecord(
                     id=task.task_id,
                     task_type=task.task_type,
-                    status=task.status,
+                    status="pending",  # 重置为 pending，准备重新执行
                     created_at=task.created_at,
-                    started_at=task.started_at,
-                    completed_at=task.completed_at,
+                    started_at=None,  # 清空开始时间
+                    completed_at=None,  # 清空完成时间
                     error=task.error,
                 )
+                task_registry[task.task_id] = record
+
+                # 重新执行任务
+                print(f"恢复任务：task_id={task.task_id}, prompt={task.prompt[:50]}...")
+                asyncio.create_task(execute_custom_task(
+                    task_id=task.task_id,
+                    prompt=task.prompt,
+                    target_dir=task.target_dir,
+                    system_prompt=task.system_prompt,
+                    auto_approve=True,
+                    skills=None,
+                ))
 
             print(f"从数据库恢复了 {len(tasks)} 个未完成的任务")
 
