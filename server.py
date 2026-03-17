@@ -317,18 +317,56 @@ async def list_tasks():
 @app.get("/tasks/{task_id}", response_model=TaskStatusResponse)
 async def get_task(task_id: str):
     """获取单个任务状态"""
-    if task_id not in task_registry:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    record = task_registry[task_id]
-    return TaskStatusResponse(
-        id=record.id,
-        task_type=record.task_type,
-        status=record.status,
-        created_at=record.created_at,
-        started_at=record.started_at,
-        completed_at=record.completed_at,
-        error=record.error,
-    )
+    # 先检查内存 registry
+    if task_id in task_registry:
+        record = task_registry[task_id]
+        return TaskStatusResponse(
+            id=record.id,
+            task_type=record.task_type,
+            status=record.status,
+            created_at=record.created_at,
+            started_at=record.started_at,
+            completed_at=record.completed_at,
+            error=record.error,
+        )
+
+    # 如果内存中没有，尝试从数据库获取
+    if AsyncSessionLocal:
+        try:
+            async with AsyncSessionLocal() as session:
+                from sqlalchemy import select
+                result = await session.execute(
+                    select(TaskModel).where(TaskModel.task_id == task_id)
+                )
+                task = result.scalar_one_or_none()
+
+                if task:
+                    # 恢复到内存
+                    record = TaskRecord(
+                        id=task.task_id,
+                        task_type=task.task_type,
+                        status=task.status,
+                        created_at=task.created_at,
+                        started_at=task.started_at,
+                        completed_at=task.completed_at,
+                        error=task.error,
+                    )
+                    task_registry[task_id] = record
+                    print(f"[DEBUG] 从数据库恢复任务到内存：task_id={task_id}")
+
+                    return TaskStatusResponse(
+                        id=record.id,
+                        task_type=record.task_type,
+                        status=record.status,
+                        created_at=record.created_at,
+                        started_at=record.started_at,
+                        completed_at=record.completed_at,
+                        error=record.error,
+                    )
+        except Exception as e:
+            print(f"[ERROR] 从数据库获取任务失败：{e}")
+
+    raise HTTPException(status_code=404, detail="任务不存在")
 
 
 @app.websocket("/ws/tasks/{task_id}")
