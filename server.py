@@ -221,6 +221,7 @@ async def recover_tasks_from_db():
             )
             tasks = result.scalars().all()
 
+            recovered_count = 0
             for task in tasks:
                 # 恢复到内存 registry
                 record = TaskRecord(
@@ -235,20 +236,31 @@ async def recover_tasks_from_db():
                 task_registry[task.task_id] = record
 
                 # 重新执行任务
-                print(f"恢复任务：task_id={task.task_id}, prompt={task.prompt[:50]}...")
-                asyncio.create_task(execute_custom_task(
+                print(f"[RECOVER] 恢复任务：task_id={task.task_id}")
+                print(f"[RECOVER] prompt={task.prompt[:100]}...")
+                print(f"[RECOVER] target_dir={task.target_dir}")
+
+                # 等待一小段时间，确保事件循环已准备好
+                await asyncio.sleep(0.1)
+
+                # 使用 ensure_future 确保任务被调度
+                asyncio.ensure_future(execute_custom_task(
                     task_id=task.task_id,
                     prompt=task.prompt,
                     target_dir=task.target_dir,
-                    system_prompt=task.system_prompt,
+                    system_prompt=task.system_prompt or "",
                     auto_approve=True,
                     skills=None,
                 ))
+                recovered_count += 1
+                print(f"[RECOVER] 任务已调度：task_id={task.task_id}")
 
-            print(f"从数据库恢复了 {len(tasks)} 个未完成的任务")
+            print(f"从数据库恢复了 {recovered_count} 个未完成的任务")
 
     except Exception as e:
         print(f"恢复任务失败：{e}")
+        import traceback
+        traceback.print_exc()
 
 
 @asynccontextmanager
