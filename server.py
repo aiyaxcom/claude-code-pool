@@ -32,7 +32,7 @@ try:
     from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
     from sqlalchemy import Column, Integer, String, DateTime, Text, Index
     from sqlalchemy.orm import declarative_base
-    from datetime import datetime
+    from datetime import datetime, timezone, timedelta
     DATABASE_AVAILABLE = True
 except ImportError:
     DATABASE_AVAILABLE = False
@@ -77,6 +77,15 @@ task_outputs: Dict[str, List[dict]] = {}
 db_engine = None
 AsyncSessionLocal = None
 
+# 时区配置（默认东八区）
+TIMEZONE_OFFSET = int(os.getenv("TIMEZONE_OFFSET", "8"))  # 时区偏移量，东八区为 8
+TZ_LOCAL = timezone(timedelta(hours=TIMEZONE_OFFSET))
+
+
+def get_local_datetime() -> datetime:
+    """获取本地时区当前时间"""
+    return datetime.now(TZ_LOCAL)
+
 
 # ==================== 数据模型 ====================
 
@@ -97,7 +106,7 @@ if DATABASE_AVAILABLE:
         system_prompt = Column(Text, nullable=True)
         result = Column(Text, nullable=True)  # JSON string
         error = Column(Text, nullable=True)
-        created_at = Column(DateTime, default=datetime.utcnow)
+        created_at = Column(DateTime, default=get_local_datetime)
         started_at = Column(DateTime, nullable=True)
         completed_at = Column(DateTime, nullable=True)
 
@@ -113,7 +122,7 @@ class TaskRecord:
     id: str
     task_type: str = "custom"
     status: str = "pending"  # pending, running, completed, failed
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=get_local_datetime)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     result: Optional[dict] = None
@@ -571,6 +580,7 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
         system_prompt=request.system_prompt,
         auto_approve=request.auto_approve,
         skills=request.skills,
+        metadata=request.metadata,
     )
 
     print(f"[DEBUG] 任务已创建并加入后台执行：task_id={task_id}")
@@ -602,7 +612,7 @@ async def execute_task(request: CustomTaskRequest):
     async with semaphore:
         active_tasks += 1
         task_registry[task_id].status = "running"
-        task_registry[task_id].started_at = datetime.utcnow()
+        task_registry[task_id].started_at = get_local_datetime()
 
         try:
             # 确定目标目录
@@ -621,13 +631,14 @@ async def execute_task(request: CustomTaskRequest):
                 system_prompt = f"{system_prompt}\n\n## 项目规范\n{claude_md_content}"
 
             # 执行任务
-            stdout, stderr = await run_claude_code_oneshot(
+            stdout, stderr, result_target_dir = await run_claude_code_oneshot(
                 prompt=request.prompt,
                 target_dir=target_dir,
                 system_prompt=system_prompt,
                 auto_approve=request.auto_approve,
                 skills=request.skills,
                 task_id=task_id,
+                timeout=CLAUDE_TIMEOUT,
             )
 
             # 检查是否有错误（stderr 非空说明 CLI 执行失败）
@@ -640,11 +651,11 @@ async def execute_task(request: CustomTaskRequest):
                 task_registry[task_id].status = "completed"
                 task_status = "completed"
 
-            task_registry[task_id].completed_at = datetime.utcnow()
+            task_registry[task_id].completed_at = get_local_datetime()
             task_registry[task_id].result = {
                 "stdout": stdout,
                 "stderr": stderr,
-                "target_dir": target_dir,
+                "target_dir": result_target_dir,
             }
 
             return ExecuteResponse(
@@ -656,7 +667,7 @@ async def execute_task(request: CustomTaskRequest):
 
         except Exception as e:
             task_registry[task_id].status = "failed"
-            task_registry[task_id].completed_at = datetime.utcnow()
+            task_registry[task_id].completed_at = get_local_datetime()
             task_registry[task_id].error = str(e)
             return ExecuteResponse(
                 success=False,
@@ -677,6 +688,7 @@ async def execute_custom_task(
     system_prompt: Optional[str],
     auto_approve: bool,
     skills: Optional[List[str]],
+    metadata: Optional[dict] = None,
 ):
     """执行自定义任务（后台异步）"""
     global active_tasks
@@ -684,7 +696,7 @@ async def execute_custom_task(
     async with semaphore:
         active_tasks += 1
         task_registry[task_id].status = "running"
-        task_registry[task_id].started_at = datetime.utcnow()
+        task_registry[task_id].started_at = get_local_datetime()
 
         # 更新数据库状态
         await save_task_to_db(task_registry[task_id])
@@ -702,13 +714,14 @@ async def execute_custom_task(
                     claude_md_content = f.read()
                 system_prompt = f"{system_prompt}\n\n## 项目规范\n{claude_md_content}"
 
-            stdout, stderr = await run_claude_code_oneshot(
+            stdout, stderr, result_target_dir = await run_claude_code_oneshot(
                 prompt=prompt,
                 target_dir=target_dir,
                 system_prompt=system_prompt or "",
                 auto_approve=auto_approve,
                 skills=skills,
                 task_id=task_id,
+                timeout=CLAUDE_TIMEOUT,
             )
 
             # 检查是否有错误（stderr 非空说明 CLI 执行失败）
@@ -719,12 +732,17 @@ async def execute_custom_task(
             else:
                 task_registry[task_id].status = "completed"
 
-            task_registry[task_id].result = {
+            # 构建 result，保留 metadata
+            result = {
                 "stdout": stdout,
                 "stderr": stderr,
-                "target_dir": target_dir,
+                "target_dir": result_target_dir,
             }
-            task_registry[task_id].completed_at = datetime.utcnow()
+            if metadata:
+                result["metadata"] = metadata
+
+            task_registry[task_id].result = result
+            task_registry[task_id].completed_at = get_local_datetime()
 
             # 更新数据库状态
             await save_task_to_db(task_registry[task_id])
@@ -732,7 +750,7 @@ async def execute_custom_task(
         except Exception as e:
             task_registry[task_id].status = "failed"
             task_registry[task_id].error = str(e)
-            task_registry[task_id].completed_at = datetime.utcnow()
+            task_registry[task_id].completed_at = get_local_datetime()
 
             # 更新数据库状态
             await save_task_to_db(task_registry[task_id])
@@ -820,15 +838,18 @@ async def run_claude_code_oneshot(
                     await broadcast_output(task_id, output_type, chunk)
 
         # 并发读取 stdout 和 stderr
-        await asyncio.gather(
-            read_stream(process.stdout, "stdout"),
-            read_stream(process.stderr, "stderr"),
-        )
+        async def read_with_timeout():
+            await asyncio.gather(
+                read_stream(process.stdout, "stdout"),
+                read_stream(process.stderr, "stderr"),
+            )
+
+        await asyncio.wait_for(read_with_timeout(), timeout=timeout)
 
         # 等待进程结束
         await process.wait()
 
-        return "".join(stdout_chunks), "".join(stderr_chunks)
+        return "".join(stdout_chunks), "".join(stderr_chunks), target_dir
 
     except asyncio.TimeoutError:
         process.kill()
@@ -866,7 +887,7 @@ async def broadcast_output(task_id: str, output_type: str, data: str):
         "type": "output",
         "source": output_type,
         "data": data,
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": get_local_datetime().isoformat()
     })
 
     # 广播到 WebSocket
