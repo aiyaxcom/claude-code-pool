@@ -771,12 +771,13 @@ async def run_claude_code_oneshot(
     # 添加 prompt 作为位置参数（在 -p 之后）
     cmd.append(prompt)
 
-    # 自动授权配置
-    if auto_approve:
-        if CLAUDE_AUTO_APPROVE == "all":
-            cmd.append("--approve")
-        elif CLAUDE_AUTO_APPROVE == "selective":
-            cmd.extend(["--approve-tools", "Read,Write,Edit,Bash,Glob,Grep"])
+    # 注意：使用 -p 模式时自动跳过权限确认，不需要 --approve 参数
+    # 自动授权配置已废弃
+    # if auto_approve:
+    #     if CLAUDE_AUTO_APPROVE == "all":
+    #         cmd.append("--approve")
+    #     elif CLAUDE_AUTO_APPROVE == "selective":
+    #         cmd.extend(["--approve-tools", "Read,Write,Edit,Bash,Glob,Grep"])
 
     # 加载 skills
     if skills:
