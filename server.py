@@ -55,6 +55,11 @@ CLAUDE_AUTO_APPROVE = os.getenv("CLAUDE_AUTO_APPROVE", "all")  # all, none, sele
 WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", "/workspace")
 OUTPUT_ROOT = os.getenv("OUTPUT_ROOT", "/sites")
 
+# 打印配置信息（用于调试）
+print(f"[CONFIG] CLAUDE_TIMEOUT={CLAUDE_TIMEOUT}秒")
+print(f"[CONFIG] OUTPUT_ROOT={OUTPUT_ROOT}")
+print(f"[CONFIG] WORKSPACE_ROOT={WORKSPACE_ROOT}")
+
 # 数据库配置（可选，用于持久化任务状态）
 DATABASE_URL = os.getenv("DATABASE_URL", "")  # PostgreSQL: postgresql+asyncpg://... 或 SQLite: sqlite+aiosqlite:///tasks.db
 
@@ -737,6 +742,12 @@ async def execute_custom_task(
     """执行自定义任务（后台异步）"""
     global active_tasks
 
+    # 打印任务信息（用于调试）
+    print(f"[TASK] 开始执行任务：task_id={task_id}")
+    print(f"[TASK] target_dir={target_dir}")
+    print(f"[TASK] prompt={prompt[:200]}...")
+    print(f"[TASK] metadata={metadata}")
+
     async with semaphore:
         active_tasks += 1
         task_registry[task_id].status = "running"
@@ -750,13 +761,23 @@ async def execute_custom_task(
                 target_dir = OUTPUT_ROOT
             if target_dir:
                 os.makedirs(target_dir, exist_ok=True)
+                print(f"[TASK] 创建/确认目录：{target_dir}")
+
+            # 检查目录权限
+            if os.access(target_dir, os.W_OK):
+                print(f"[TASK] 目录可写：{target_dir}")
+            else:
+                print(f"[TASK] 警告：目录不可写：{target_dir}")
 
             # 加载 CLAUDE.md
             claude_md_path = "/root/.claude/CLAUDE.md"
             if os.path.exists(claude_md_path):
                 with open(claude_md_path, "r") as f:
                     claude_md_content = f.read()
+                print(f"[TASK] 已加载 CLAUDE.md，长度：{len(claude_md_content)}")
                 system_prompt = f"{system_prompt}\n\n## 项目规范\n{claude_md_content}"
+            else:
+                print(f"[TASK] 警告：CLAUDE.md 不存在：{claude_md_path}")
 
             stdout, stderr, result_target_dir = await run_claude_code_oneshot(
                 prompt=prompt,
@@ -848,11 +869,21 @@ async def run_claude_code_oneshot(
     #     for skill in skills:
     #         cmd.extend(["--skill", skill])
 
+    # 打印调试信息
     print(f"[OneShot] 执行 Claude 命令，target_dir={target_dir}")
+    print(f"[OneShot] 命令：{' '.join(cmd)}")
+    print(f"[OneShot] ANTHROPIC_BASE_URL={os.getenv('ANTHROPIC_BASE_URL', '未设置')}")
+    print(f"[OneShot] ANTHROPIC_MODEL={os.getenv('ANTHROPIC_MODEL', '未设置')}")
+    print(f"[OneShot] timeout={timeout}秒")
 
     env = os.environ.copy()
     if CLAUDE_API_KEY:
         env["CLAUDE_API_KEY"] = CLAUDE_API_KEY
+    # 添加 API URL 和模型到环境变量
+    if os.getenv("ANTHROPIC_BASE_URL"):
+        env["ANTHROPIC_BASE_URL"] = os.getenv("ANTHROPIC_BASE_URL")
+    if os.getenv("ANTHROPIC_MODEL"):
+        env["ANTHROPIC_MODEL"] = os.getenv("ANTHROPIC_MODEL")
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
