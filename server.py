@@ -743,13 +743,17 @@ async def run_claude_code_oneshot(
         print("未找到 Claude Code CLI")
         return "", "Claude Code CLI 未安装"
 
+    # 使用 -p (--print) 进行非交互式执行
     cmd = [
         claude_cmd,
-        "--prompt", prompt,
+        "-p",  # 非交互式输出
         "--allowedTools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
         "--outputFormat", "stream",
         "--continue",
     ]
+
+    # 添加 prompt 作为位置参数（在 -p 之后）
+    cmd.append(prompt)
 
     # 自动授权配置
     if auto_approve:
