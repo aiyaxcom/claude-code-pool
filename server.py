@@ -515,6 +515,8 @@ async def execute_task(request: CustomTaskRequest):
 
     适用于需要立即获取结果的场景
     """
+    global active_tasks
+
     task_id = request.task_id or str(uuid.uuid4())[:8]
 
     task_registry[task_id] = TaskRecord(
@@ -594,6 +596,8 @@ async def execute_custom_task(
     skills: Optional[List[str]],
 ):
     """执行自定义任务（后台异步）"""
+    global active_tasks
+
     async with semaphore:
         active_tasks += 1
         task_registry[task_id].status = "running"
