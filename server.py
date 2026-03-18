@@ -882,25 +882,16 @@ async def run_claude_code_oneshot(
         "--allowed-tools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
         "--output-format", "stream-json",  # 流式 JSON 输出
         "--continue",
+        "--skip-auth",  # 跳过认证检查（如果已配置）
     ]
+
+    # 添加环境变量来禁用交互式提示
+    # CLAUDE_CODE_DISABLE_ANALYTICS=1 禁用分析
+    # CLAUDE_CODE_INTERACTIVE=0 禁用交互模式
+    cmd.append(prompt)
 
     # 添加 prompt 作为位置参数（在 -p 之后）
     cmd.append(prompt)
-
-    # 注意：使用 -p 模式时自动跳过权限确认，不需要 --approve 参数
-    # 自动授权配置已废弃
-    # if auto_approve:
-    #     if CLAUDE_AUTO_APPROVE == "all":
-    #         cmd.append("--approve")
-    #     elif CLAUDE_AUTO_APPROVE == "selective":
-    #         cmd.extend(["--approve-tools", "Read,Write,Edit,Bash,Glob,Grep"])
-
-    # 注意：新版 CLI 没有 --skill 参数
-    # Skills 通过 settings.json 配置文件加载：
-    # /root/.claude/settings.json 中的 "skills" 配置项
-    # if skills:
-    #     for skill in skills:
-    #         cmd.extend(["--skill", skill])
 
     # 打印调试信息
     print(f"[OneShot] 执行 Claude 命令，target_dir={target_dir}")
@@ -917,6 +908,11 @@ async def run_claude_code_oneshot(
         env["ANTHROPIC_BASE_URL"] = os.getenv("ANTHROPIC_BASE_URL")
     if os.getenv("ANTHROPIC_MODEL"):
         env["ANTHROPIC_MODEL"] = os.getenv("ANTHROPIC_MODEL")
+
+    # 禁用交互式提示和 onboarding 流程
+    env["CLAUDE_CODE_DISABLE_ANALYTICS"] = "1"
+    env["CLAUDE_CODE_INTERACTIVE"] = "0"
+    env["CLAUDE_CODE_SKIP_TELEMETRY"] = "1"
 
     # 确保 CLAUDE_CODE_WORKSPACE 设置正确
     env["CLAUDE_CODE_WORKSPACE"] = target_dir
