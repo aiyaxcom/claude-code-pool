@@ -56,9 +56,19 @@ WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", "/workspace")
 OUTPUT_ROOT = os.getenv("OUTPUT_ROOT", "/sites")
 
 # 打印配置信息（用于调试）
-print(f"[CONFIG] CLAUDE_TIMEOUT={CLAUDE_TIMEOUT}秒")
+print(f"[CONFIG] CLAUDE_TIMEOUT={CLAUDE_TIMEOUT} 秒")
 print(f"[CONFIG] OUTPUT_ROOT={OUTPUT_ROOT}")
 print(f"[CONFIG] WORKSPACE_ROOT={WORKSPACE_ROOT}")
+print(f"[CONFIG] ANTHROPIC_BASE_URL={os.getenv('ANTHROPIC_BASE_URL', '未设置')}")
+print(f"[CONFIG] ANTHROPIC_MODEL={os.getenv('ANTHROPIC_MODEL', '未设置')}")
+
+# 打印 API_KEY 前缀（用于验证）
+_api_key = os.getenv('CLAUDE_API_KEY') or os.getenv('ANTHROPIC_AUTH_TOKEN') or ''
+if _api_key:
+    _prefix = _api_key[:15] + '...' if len(_api_key) > 15 else _api_key
+    print(f"[CONFIG] CLAUDE_API_KEY={_prefix} (前 15 位)")
+else:
+    print(f"[CONFIG] CLAUDE_API_KEY=未设置")
 
 # 数据库配置（可选，用于持久化任务状态）
 DATABASE_URL = os.getenv("DATABASE_URL", "")  # PostgreSQL: postgresql+asyncpg://... 或 SQLite: sqlite+aiosqlite:///tasks.db
@@ -726,6 +736,29 @@ async def execute_task(request: CustomTaskRequest):
 
         finally:
             active_tasks -= 1
+
+
+# ==================== 调试端点 ====================
+
+@app.get("/debug/env")
+async def debug_environment():
+    """调试端点：查看当前容器的环境变量（敏感信息已脱敏）"""
+    # 获取 API_KEY 并显示前缀
+    _api_key = os.getenv('CLAUDE_API_KEY') or os.getenv('ANTHROPIC_AUTH_TOKEN') or ''
+    _api_key_display = '未设置'
+    if _api_key:
+        _api_key_display = _api_key[:15] + '...' if len(_api_key) > 15 else _api_key
+
+    return {
+        "ANTHROPIC_BASE_URL": os.getenv("ANTHROPIC_BASE_URL", "未设置"),
+        "ANTHROPIC_MODEL": os.getenv("ANTHROPIC_MODEL", "未设置"),
+        "CLAUDE_API_KEY": _api_key_display,
+        "ANTHROPIC_AUTH_TOKEN": '已设置' if os.getenv('ANTHROPIC_AUTH_TOKEN') else '未设置',
+        "POOL_SIZE": os.getenv("POOL_SIZE", "3"),
+        "CLAUDE_TIMEOUT": os.getenv("CLAUDE_TIMEOUT", "300"),
+        "OUTPUT_ROOT": os.getenv("OUTPUT_ROOT", "/sites"),
+        "WORKSPACE_ROOT": os.getenv("WORKSPACE_ROOT", "/workspace"),
+    }
 
 
 # ==================== 任务执行器 ====================
