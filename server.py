@@ -879,16 +879,11 @@ async def run_claude_code_oneshot(
     cmd = [
         claude_cmd,
         "-p",  # 非交互式输出
+        "--permission-mode", "dontAsk",  # 跳过权限确认
         "--allowed-tools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
         "--output-format", "stream-json",  # 流式 JSON 输出
         "--continue",
-        "--skip-auth",  # 跳过认证检查（如果已配置）
     ]
-
-    # 添加环境变量来禁用交互式提示
-    # CLAUDE_CODE_DISABLE_ANALYTICS=1 禁用分析
-    # CLAUDE_CODE_INTERACTIVE=0 禁用交互模式
-    cmd.append(prompt)
 
     # 添加 prompt 作为位置参数（在 -p 之后）
     cmd.append(prompt)
