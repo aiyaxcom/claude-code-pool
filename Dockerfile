@@ -36,6 +36,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制应用代码
 COPY server.py .
+COPY start.sh /start.sh
+RUN chmod +x /start.sh
 
 # 创建站点目录
 RUN mkdir -p /sites && chmod 755 /sites
@@ -53,4 +55,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 EXPOSE 8000
 
 # 启动命令
-CMD ["python", "server.py"]
+CMD ["/start.sh"]
