@@ -918,14 +918,19 @@ async def run_claude_code_oneshot(
     if os.getenv("ANTHROPIC_MODEL"):
         env["ANTHROPIC_MODEL"] = os.getenv("ANTHROPIC_MODEL")
 
+    # 确保 CLAUDE_CODE_WORKSPACE 设置正确
+    env["CLAUDE_CODE_WORKSPACE"] = target_dir
+
     process = await asyncio.create_subprocess_exec(
         *cmd,
-        stdin=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.DEVNULL,  # 不接收输入，防止等待
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=target_dir,
         env=env,
     )
+
+    print(f"[OneShot] 进程已启动，PID={process.pid}")
 
     system_message = f"{system_prompt}\n\n---\n\n{prompt}\n\n---\n\n请开始执行任务，不要等待确认，直接完成所有工作。"
 
