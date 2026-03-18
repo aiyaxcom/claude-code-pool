@@ -882,6 +882,7 @@ async def run_claude_code_oneshot(
         "--permission-mode", "dontAsk",  # 跳过权限确认
         "--allowed-tools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
         "--output-format", "stream-json",  # 流式 JSON 输出
+        "--verbose",  # verbose 模式（stream-json 必需）
         "--continue",
     ]
 
