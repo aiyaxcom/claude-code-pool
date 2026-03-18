@@ -934,16 +934,28 @@ async def run_claude_code_oneshot(
         stdout_chunks = []
         stderr_chunks = []
 
+        # 计数器，用于调试
+        stdout_count = 0
+        stderr_count = 0
+
         async def read_stream(stream, output_type):
+            nonlocal stdout_count, stderr_count
             while True:
                 line = await stream.readline()
                 if not line:
                     break
                 chunk = line.decode()
+                if output_type == "stdout":
+                    stdout_count += 1
+                else:
+                    stderr_count += 1
                 stdout_chunks.append(chunk) if output_type == "stdout" else stderr_chunks.append(chunk)
                 # 广播输出到 WebSocket
                 if task_id:
                     await broadcast_output(task_id, output_type, chunk)
+
+        # 打印调试信息
+        print(f"[OneShot] 开始读取输出流，task_id={task_id}")
 
         # 并发读取 stdout 和 stderr
         async def read_with_timeout():
@@ -956,6 +968,14 @@ async def run_claude_code_oneshot(
 
         # 等待进程结束
         await process.wait()
+
+        # 检查返回码
+        if process.returncode != 0:
+            print(f"[OneShot] 警告：Claude Code CLI 返回非零退出码：{process.returncode}")
+
+        # 打印调试信息
+        print(f"[OneShot] 执行完成，task_id={task_id}, stdout={stdout_count}行，stderr={stderr_count}行")
+        print(f"[OneShot] 已存储输出到 task_outputs: {len(task_outputs.get(task_id, []))}条")
 
         return "".join(stdout_chunks), "".join(stderr_chunks), target_dir
 
