@@ -35,7 +35,10 @@
     "env_vars": [
       "ANTHROPIC_AUTH_TOKEN",
       "ANTHROPIC_BASE_URL",
-      "ANTHROPIC_MODEL"
-    ]
+      "ANTHROPIC_MODEL",
+      "CLAUDE_API_KEY"
+    ],
+    "permission_mode": "启动脚本使用 --permission-mode dontAsk 跳过权限确认",
+    "verbose": "添加 --verbose 参数输出详细日志（用于调试）"
   }
 }
