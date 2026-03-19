@@ -1,0 +1,56 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract tag and version info
+        id: get_version
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "version=${TAG_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # 从 CHANGELOG.md 提取当前版本的更新日志
+          VERSION=${{ steps.get_version.outputs.version }}
+
+          # 尝试从 CHANGELOG.md 提取内容
+          if grep -q "## \[v$VERSION\]" CHANGELOG.md 2>/dev/null; then
+            NOTES=$(sed -n "/## \[v$VERSION\]/,/## \[/p" CHANGELOG.md | head -n -1)
+          elif grep -q "## \[$VERSION\]" CHANGELOG.md 2>/dev/null; then
+            NOTES=$(sed -n "/## \[$VERSION\]/,/## \[/p" CHANGELOG.md | head -n -1)
+          else
+            NOTES="Release ${{ steps.get_version.outputs.tag_name }}"
+          fi
+
+          # 输出到文件
+          echo "$NOTES" > RELEASE_NOTES.md
+          cat RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Claude Code Pool ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: false
+          generate_release_notes: true

@@ -5,6 +5,7 @@
 ![Docker](https://img.shields.io/docker/v/aiyax/claude-code-pool?label=docker&logo=docker)
 ![Python](https://img.shields.io/badge/python-3.11+-blue.svg)
 ![CI/CD](https://img.shields.io/github/actions/workflow/status/aiyaxcom/claude-code-pool/docker-image.yml?branch=main&label=build)
+![Release](https://img.shields.io/github/actions/workflow/status/aiyaxcom/claude-code-pool/create-release.yml?event=push&label=release)
 
 ![GitHub Release](https://img.shields.io/github/v/release/aiyaxcom/claude-code-pool?label=latest&logo=github)
 ![Docker Pulls](https://img.shields.io/docker/pulls/aiyax/claude-code-pool)
