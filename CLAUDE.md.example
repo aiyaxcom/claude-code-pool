@@ -1,46 +1,130 @@
-# CLAUDE.md 示例文件
-# 复制此文件为 CLAUDE.md 并根据需要修改
+# CLAUDE.md - 项目规范文件
 
-# 项目约束
+此文件指导 Claude Code 在项目中执行任务时遵守的规则和约束。
 
-## 代码风格
-- 使用 4 个空格缩进
-- 函数和类之间空两行
-- 行宽限制 100 字符
+## 工作环境
 
-## 命名规范
-- 变量和函数：snake_case
-- 类：PascalCase
-- 常量：UPPER_CASE
+### 目录结构
 
-## 注释要求
-- 公共 API 必须有 docstring
-- 复杂逻辑需要行内注释
-- 使用中文注释
+```
+/workspace          # 项目根目录（可读写）
+/sites              # 输出目录（可选）
+```
 
-## 测试要求
-- 关键功能需要单元测试
-- 测试覆盖率 > 80%
+### 推荐配置
+
+- **WORKSPACE_ROOT**: `/workspace` - 工作目录根路径
+- **OUTPUT_ROOT**: `/sites` - 输出目录根路径
 
 ## 安全约束
-1. 不执行破坏性命令（rm -rf, chmod 777 等）
-2. 不访问敏感文件（/etc/passwd, ~/.ssh/ 等）
-3. 不暴露密钥和密码
-4. SQL 查询使用参数化
+
+### 1. 文件操作
+
+- 执行文件修改前先确认目标路径正确
+- 重要文件修改前先备份
+- 使用 `git diff` 确认变更内容后再提交
+
+### 2. 命令执行
+
+- 不执行破坏性命令（如 `rm -rf /`、`chmod 777` 等）
+- 不访问敏感文件（如 `/etc/passwd`、`~/.ssh/` 等）
+- 不暴露密钥和密码到日志或输出中
+
+### 3. 网络访问
+
+- 仅在必要时访问外部网络
+- 使用 HTTPS 协议
+- 不在 URL 中暴露敏感参数
+
+### 4. 代码质量
+
+- 遵循项目现有代码风格
+- 保持代码简洁，避免过度设计
+- 添加必要的注释说明复杂逻辑
+
+## 代码风格
+
+### Python
+
+- 使用 4 个空格缩进
+- 函数和类之间空两行
+- 遵循 PEP 8 规范
+- 使用类型注解
+
+### JavaScript/TypeScript
+
+- 使用 2 个空格缩进
+- 使用 ES6+ 语法
+- 优先使用 const/let 而非 var
+
+### 命名规范
+
+- 变量和函数：snake_case (Python) 或 camelCase (JS)
+- 类：PascalCase
+- 常量：UPPER_CASE
+- 文件：kebab-case（如 `my-module.py`）
 
 ## 任务执行规范
-- 执行前先确认目标目录有写入权限
-- 修改文件前先备份重要数据
-- 使用 git 进行版本控制，小步提交
-- 遇到不确定的操作先询问用户
+
+### 1. 理解需求
+
+- 确认任务目标和预期输出
+- 识别潜在的边界情况
+- 评估所需工具调用次数
+
+### 2. 执行流程
+
+1. 先读取相关文件了解现状
+2. 规划修改方案
+3. 执行最小化修改
+4. 验证修改结果
+
+### 3. 工具使用限制
+
+- 单次任务工具调用建议不超过 50 次
+- 复杂任务分解为多个子任务
+- 批量写入文件而非多次追加
 
 ## 常用工具说明
-- `Read`: 读取文件内容
-- `Write`: 创建新文件
-- `Edit`: 修改现有文件
-- `Bash`: 执行 shell 命令
-- `Glob`: 文件路径匹配搜索
-- `Grep`: 文件内容搜索
-- `Task`: 启动子任务处理复杂任务
-- `WebFetch`: 获取网页内容
-- `WebSearch`: 搜索网络信息
+
+| 工具 | 用途 | 示例 |
+|------|------|------|
+| `Read` | 读取文件 | 查看现有代码 |
+| `Write` | 创建文件 | 新建配置文件 |
+| `Edit` | 修改文件 | 替换代码片段 |
+| `Bash` | 执行命令 | 运行测试、git 操作 |
+| `Glob` | 文件搜索 | 查找特定类型文件 |
+| `Grep` | 内容搜索 | 查找代码引用 |
+| `Task` | 子任务 | 委托复杂任务 |
+
+## 示例配置
+
+### settings.json
+
+```json
+{
+  "theme": "dark",
+  "allowedTools": ["Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+  "autoApprove": {
+    "enabled": true,
+    "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"]
+  },
+  "mode": "agent",
+  "model": "claude-sonnet-4-5",
+  "permissions": {
+    "write": true,
+    "execute": true,
+    "network": true
+  }
+}
+```
+
+### 环境变量
+
+```bash
+ANTHROPIC_AUTH_TOKEN=sk-ant-xxxxx
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_MODEL=claude-sonnet-4-5
+CLAUDE_TIMEOUT=600
+POOL_SIZE=3
+```

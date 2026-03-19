@@ -1,4 +1,5 @@
 {
+  "theme": "dark",
   "allowedTools": [
     "Read",
     "Write",
@@ -15,10 +16,8 @@
     "tools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
     "commands": ["ls", "cat", "head", "tail", "grep", "find", "mkdir", "cp", "mv", "git status", "git diff", "git log", "wc", "du"]
   },
-  "model": {
-    "maxTokens": 8192,
-    "temperature": 0.7
-  },
+  "mode": "agent",
+  "model": "claude-sonnet-4-5",
   "telemetry": {
     "enabled": false
   },
@@ -30,6 +29,8 @@
   "env": {
     "WORKSPACE_ROOT": "/workspace"
   },
+  "trustedDirectories": ["/app", "/workspace", "/sites"],
+  "approvalPref": "auto",
   "_notes": {
     "description": "敏感信息（ANTHROPIC_*）请通过环境变量或 .env 文件配置，不要写入此文件",
     "env_vars": [
@@ -39,6 +40,7 @@
       "CLAUDE_API_KEY"
     ],
     "permission_mode": "启动脚本使用 --permission-mode dontAsk 跳过权限确认",
-    "verbose": "添加 --verbose 参数输出详细日志（用于调试）"
+    "verbose": "添加 --verbose 参数输出详细日志（用于调试）",
+    "model_format": "model 字段是字符串，不是对象。例如：\"claude-sonnet-4-5\" 或 \"qwen3.5-plus\""
   }
 }
