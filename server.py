@@ -120,6 +120,7 @@ if DATABASE_AVAILABLE:
         target_dir = Column(String(512), nullable=True)
         system_prompt = Column(Text, nullable=True)
         result = Column(Text, nullable=True)  # JSON string
+        summary = Column(Text, nullable=True)  # 任务总结（markdown 格式，从 CLI result 字段提取）
         error = Column(Text, nullable=True)
         created_at = Column(DateTime, default=get_local_datetime)
         started_at = Column(DateTime, nullable=True)
@@ -141,6 +142,7 @@ class TaskRecord:
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     result: Optional[dict] = None
+    summary: Optional[str] = None  # 任务总结（markdown 格式）
     error: Optional[str] = None
 
 
@@ -196,69 +198,129 @@ class ExecuteResponse(BaseModel):
 # ==================== 应用生命周期 ====================
 
 async def migrate_database_schema():
-    """迁移数据库 schema - 修复时间戳字段类型"""
+    """迁移数据库 schema - 修复时间戳字段类型，添加新字段"""
     if not DATABASE_AVAILABLE or not DATABASE_URL:
         return
 
     try:
         db_engine = create_async_engine(DATABASE_URL, echo=False)
 
-        # 检查是否需要迁移（检查 tasks 表的 started_at 字段类型）
         async with db_engine.begin() as conn:
-            # 使用 raw SQL 检查列类型
             from sqlalchemy import text
-            result = await conn.execute(text("""
-                SELECT column_name, data_type
-                FROM information_schema.columns
-                WHERE table_name = 'tasks'
-                AND column_name IN ('started_at', 'completed_at', 'created_at')
-                ORDER BY column_name
-            """))
-            columns = result.fetchall()
 
-            # 检查是否是 float8/double precision 类型
-            needs_migration = False
-            for col_name, data_type in columns:
-                if data_type in ('double precision', 'float8'):
-                    needs_migration = True
-                    print(f"[MIGRATE] 检测到字段 {col_name} 类型为 {data_type}，需要迁移")
+            # 判断数据库类型
+            is_postgres = DATABASE_URL.startswith('postgresql')
+            is_sqlite = DATABASE_URL.startswith('sqlite')
 
-            if needs_migration:
-                print("[MIGRATE] 开始迁移时间戳字段类型...")
-
-                # 执行迁移
-                await conn.execute(text("""
-                    ALTER TABLE tasks
-                    ALTER COLUMN started_at TYPE TIMESTAMP
-                    USING CASE
-                        WHEN started_at IS NOT NULL THEN TO_TIMESTAMP(started_at)
-                        ELSE NULL
-                    END
+            if is_postgres:
+                # PostgreSQL 迁移逻辑
+                result = await conn.execute(text("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.tables
+                        WHERE table_name = 'tasks'
+                    )
                 """))
+                table_exists = result.scalar()
 
-                await conn.execute(text("""
-                    ALTER TABLE tasks
-                    ALTER COLUMN completed_at TYPE TIMESTAMP
-                    USING CASE
-                        WHEN completed_at IS NOT NULL THEN TO_TIMESTAMP(completed_at)
-                        ELSE NULL
-                    END
+                if not table_exists:
+                    print("[MIGRATE] tasks 表不存在，将创建新表")
+                    await db_engine.dispose()
+                    return
+
+                # 检查列类型
+                result = await conn.execute(text("""
+                    SELECT column_name, data_type
+                    FROM information_schema.columns
+                    WHERE table_name = 'tasks'
+                    AND column_name IN ('started_at', 'completed_at', 'created_at')
+                    ORDER BY column_name
                 """))
+                columns = result.fetchall()
 
-                await conn.execute(text("""
-                    ALTER TABLE tasks
-                    ALTER COLUMN created_at TYPE TIMESTAMP
-                    USING TO_TIMESTAMP(created_at)
+                # 检查是否是 float8/double precision 类型
+                needs_migration = False
+                for col_name, data_type in columns:
+                    if data_type in ('double precision', 'float8'):
+                        needs_migration = True
+                        print(f"[MIGRATE] 检测到字段 {col_name} 类型为 {data_type}，需要迁移")
+
+                if needs_migration:
+                    print("[MIGRATE] 开始迁移时间戳字段类型...")
+
+                    await conn.execute(text("""
+                        ALTER TABLE tasks
+                        ALTER COLUMN started_at TYPE TIMESTAMP
+                        USING CASE
+                            WHEN started_at IS NOT NULL THEN TO_TIMESTAMP(started_at)
+                            ELSE NULL
+                        END
+                    """))
+
+                    await conn.execute(text("""
+                        ALTER TABLE tasks
+                        ALTER COLUMN completed_at TYPE TIMESTAMP
+                        USING CASE
+                            WHEN completed_at IS NOT NULL THEN TO_TIMESTAMP(completed_at)
+                            ELSE NULL
+                        END
+                    """))
+
+                    await conn.execute(text("""
+                        ALTER TABLE tasks
+                        ALTER COLUMN created_at TYPE TIMESTAMP
+                        USING TO_TIMESTAMP(created_at)
+                    """))
+
+                    await conn.execute(text("""
+                        ALTER TABLE tasks
+                        ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP
+                    """))
+
+                    print("[MIGRATE] 时间戳字段迁移完成")
+
+                # 检查并添加 summary 列
+                result = await conn.execute(text("""
+                    SELECT column_name
+                    FROM information_schema.columns
+                    WHERE table_name = 'tasks'
+                    AND column_name = 'summary'
                 """))
+                summary_exists = result.fetchone()
 
-                await conn.execute(text("""
-                    ALTER TABLE tasks
-                    ALTER COLUMN created_at SET DEFAULT CURRENT_TIMESTAMP
+                if not summary_exists:
+                    print("[MIGRATE] 添加 summary 列...")
+                    await conn.execute(text("""
+                        ALTER TABLE tasks
+                        ADD COLUMN summary TEXT
+                    """))
+                    print("[MIGRATE] summary 列添加完成")
+
+            elif is_sqlite:
+                # SQLite 迁移逻辑
+                result = await conn.execute(text("""
+                    SELECT name FROM sqlite_master
+                    WHERE type='table' AND name='tasks'
                 """))
+                table_exists = result.fetchone()
 
-                print("[MIGRATE] 时间戳字段迁移完成")
-            else:
-                print("[MIGRATE] 数据库 schema 已是最新，无需迁移")
+                if not table_exists:
+                    print("[MIGRATE] tasks 表不存在，将创建新表")
+                    await db_engine.dispose()
+                    return
+
+                # 检查列是否存在
+                result = await conn.execute(text("PRAGMA table_info(tasks)"))
+                columns = [row[1] for row in result.fetchall()]
+
+                if 'summary' not in columns:
+                    print("[MIGRATE] 添加 summary 列...")
+                    await conn.execute(text("""
+                        ALTER TABLE tasks
+                        ADD COLUMN summary TEXT
+                    """))
+                    print("[MIGRATE] summary 列添加完成")
+
+            print("[MIGRATE] 数据库 schema 迁移完成")
 
         await db_engine.dispose()
 
@@ -499,6 +561,7 @@ async def get_task_detail(task_id: str):
         "started_at": record.started_at.isoformat() if record.started_at else None,
         "completed_at": record.completed_at.isoformat() if record.completed_at else None,
         "error": record.error,
+        "summary": record.summary,  # 任务总结（markdown 格式）
         "current_activity": activity_summary,
         "recent_activities": recent_activities[:5],  # 最近 5 个活动
         "output_count": len(outputs),
@@ -842,6 +905,12 @@ async def execute_custom_task(
             task_registry[task_id].result = result
             task_registry[task_id].completed_at = get_local_datetime()
 
+            # 从 stdout 中提取总结（markdown 格式）
+            summary = extract_summary_from_stdout(stdout)
+            if summary:
+                task_registry[task_id].summary = summary
+                print(f"[TASK] 提取总结成功，长度：{len(summary)} 字符")
+
             # 更新数据库状态
             await save_task_to_db(task_registry[task_id])
 
@@ -1003,6 +1072,34 @@ async def find_claude_command() -> Optional[str]:
 
 # ==================== 工具函数 ====================
 
+def extract_summary_from_stdout(stdout: str) -> Optional[str]:
+    """
+    从 Claude Code CLI 输出中提取总结。
+
+    CLI 使用 --output-format stream-json 输出，最后一行包含 type: "result"，
+    其中的 result 字段包含 markdown 格式的总结。
+    """
+    if not stdout or not stdout.strip():
+        return None
+
+    # 按行解析，找到最后一行 type: "result" 的 JSON
+    lines = stdout.strip().split('\n')
+
+    # 从后往前找 result 行
+    for line in reversed(lines):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+            if obj.get('type') == 'result' and obj.get('result'):
+                return obj['result']
+        except json.JSONDecodeError:
+            continue
+
+    return None
+
+
 async def broadcast_output(task_id: str, output_type: str, data: str):
     """广播任务输出到所有连接的 WebSocket 并存储日志"""
     # 存储输出日志
@@ -1093,6 +1190,7 @@ async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir:
                 existing.started_at = task_record.started_at
                 existing.completed_at = task_record.completed_at
                 existing.error = task_record.error
+                existing.summary = task_record.summary  # 保存总结
                 if task_record.result:
                     existing.result = json.dumps(task_record.result)
                 print(f"[DEBUG] 更新数据库任务：task_id={task_record.id}, status={task_record.status}")
@@ -1110,6 +1208,7 @@ async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir:
                     completed_at=task_record.completed_at,
                     error=task_record.error,
                     result=json.dumps(task_record.result) if task_record.result else None,
+                    summary=task_record.summary,  # 保存总结
                 )
                 session.add(new_task)
                 print(f"[DEBUG] 新建数据库任务：task_id={task_record.id}, prompt={prompt[:50]}...")
