@@ -47,7 +47,8 @@ except ImportError:
 
 # 并发控制
 POOL_SIZE = int(os.getenv("POOL_SIZE", "3"))
-CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "300"))
+CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "300"))  # 空闲超时（无输出时）
+MAX_TOTAL_TIMEOUT = int(os.getenv("MAX_TOTAL_TIMEOUT", "3600"))  # 最大总执行时间（默认1小时）
 
 # Claude Code 配置
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
@@ -56,7 +57,8 @@ WORKSPACE_ROOT = os.getenv("WORKSPACE_ROOT", "/workspace")
 OUTPUT_ROOT = os.getenv("OUTPUT_ROOT", "/sites")
 
 # 打印配置信息（用于调试）
-print(f"[CONFIG] CLAUDE_TIMEOUT={CLAUDE_TIMEOUT} 秒")
+print(f"[CONFIG] CLAUDE_TIMEOUT={CLAUDE_TIMEOUT} 秒（空闲超时）")
+print(f"[CONFIG] MAX_TOTAL_TIMEOUT={MAX_TOTAL_TIMEOUT} 秒（最大执行时间）")
 print(f"[CONFIG] OUTPUT_ROOT={OUTPUT_ROOT}")
 print(f"[CONFIG] WORKSPACE_ROOT={WORKSPACE_ROOT}")
 print(f"[CONFIG] ANTHROPIC_BASE_URL={os.getenv('ANTHROPIC_BASE_URL', '未设置')}")
@@ -1004,13 +1006,23 @@ async def run_claude_code_oneshot(
         stdout_count = 0
         stderr_count = 0
 
+        # 动态超时：跟踪最后一次活动时间
+        last_activity_time = time.time()
+        idle_timeout = timeout  # 无输出时的超时时间（使用配置的 CLAUDE_TIMEOUT）
+        max_total_timeout = MAX_TOTAL_TIMEOUT  # 最大总执行时间（使用全局配置）
+
         async def read_stream(stream, output_type):
-            nonlocal stdout_count, stderr_count
+            nonlocal stdout_count, stderr_count, last_activity_time
             while True:
-                line = await stream.readline()
+                try:
+                    line = await asyncio.wait_for(stream.readline(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    # 读取超时，继续循环检查
+                    continue
                 if not line:
                     break
                 chunk = line.decode()
+                last_activity_time = time.time()  # 更新活动时间
                 if output_type == "stdout":
                     stdout_count += 1
                 else:
@@ -1021,16 +1033,55 @@ async def run_claude_code_oneshot(
                     await broadcast_output(task_id, output_type, chunk)
 
         # 打印调试信息
-        print(f"[OneShot] 开始读取输出流，task_id={task_id}")
+        print(f"[OneShot] 开始读取输出流，task_id={task_id}, idle_timeout={idle_timeout}s, max_total_timeout={max_total_timeout}s")
 
-        # 并发读取 stdout 和 stderr
+        # 检查超时的协程
+        async def check_timeout():
+            while True:
+                await asyncio.sleep(1.0)
+                current_time = time.time()
+                idle_duration = current_time - last_activity_time
+                total_duration = current_time - start_time
+
+                # 检查空闲超时（无输出）
+                if idle_duration >= idle_timeout:
+                    print(f"[OneShot] 空闲超时：{idle_duration:.1f}秒无输出")
+                    return "idle_timeout"
+
+                # 检查最大总超时
+                if total_duration >= max_total_timeout:
+                    print(f"[OneShot] 最大执行时间超时：{total_duration:.1f}秒")
+                    return "max_timeout"
+
+        # 读取输出并监控超时
+        start_time = time.time()
+
         async def read_with_timeout():
-            await asyncio.gather(
+            timeout_task = asyncio.create_task(check_timeout())
+            read_task = asyncio.create_task(asyncio.gather(
                 read_stream(process.stdout, "stdout"),
                 read_stream(process.stderr, "stderr"),
+            ))
+
+            done, pending = await asyncio.wait(
+                {timeout_task, read_task},
+                return_when=asyncio.FIRST_COMPLETED,
             )
 
-        await asyncio.wait_for(read_with_timeout(), timeout=timeout)
+            # 取消未完成的任务
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+            # 检查是否是超时导致的结束
+            if timeout_task in done:
+                timeout_reason = timeout_task.result()
+                raise TimeoutError(f"Claude Code 执行超时（空闲 {idle_timeout}秒无输出）")
+
+        await read_with_timeout()
 
         # 等待进程结束
         await process.wait()
@@ -1045,9 +1096,15 @@ async def run_claude_code_oneshot(
 
         return "".join(stdout_chunks), "".join(stderr_chunks), target_dir
 
-    except asyncio.TimeoutError:
+    except TimeoutError as e:
+        # 动态超时触发的超时错误
+        print(f"[OneShot] 超时终止进程：{e}")
         process.kill()
-        raise TimeoutError(f"Claude Code 执行超时（{timeout}秒）")
+        raise
+    except Exception as e:
+        # 其他异常也确保进程被终止
+        process.kill()
+        raise
 
 
 async def find_claude_command() -> Optional[str]:
