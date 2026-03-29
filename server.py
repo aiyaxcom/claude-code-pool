@@ -1019,6 +1019,21 @@ async def run_claude_code_oneshot(
                 except asyncio.TimeoutError:
                     # 读取超时，继续循环检查
                     continue
+                except ValueError as e:
+                    # LimitOverrunError: 行太长，超过 readline 默认限制
+                    # 使用 read() 读取大块数据来处理
+                    if "chunk is longer than limit" in str(e):
+                        try:
+                            # 读取 1MB 的数据块
+                            chunk = await asyncio.wait_for(stream.read(1024*1024), timeout=1.0)
+                            if not chunk:
+                                break
+                            line = chunk
+                        except asyncio.TimeoutError:
+                            continue
+                    else:
+                        # 其他 ValueError，跳出循环
+                        break
                 if not line:
                     break
                 chunk = line.decode()
