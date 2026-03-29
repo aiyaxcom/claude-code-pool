@@ -1013,6 +1013,7 @@ async def run_claude_code_oneshot(
 
         async def read_stream(stream, output_type):
             nonlocal stdout_count, stderr_count, last_activity_time
+            MAX_CHUNK_SIZE = 32768  # 最大输出块大小：32KB，超过则截断
             while True:
                 try:
                     line = await asyncio.wait_for(stream.readline(), timeout=1.0)
@@ -1020,23 +1021,29 @@ async def run_claude_code_oneshot(
                     # 读取超时，继续循环检查
                     continue
                 except ValueError as e:
-                    # LimitOverrunError: 行太长，超过 readline 默认限制
-                    # 使用 read() 读取大块数据来处理
+                    # LimitOverrunError: 行太长，超过 readline 默认限制 (64KB)
                     if "chunk is longer than limit" in str(e):
                         try:
-                            # 读取 1MB 的数据块
-                            chunk = await asyncio.wait_for(stream.read(1024*1024), timeout=1.0)
+                            # 读取最大块大小，截断过长内容
+                            chunk = await asyncio.wait_for(stream.read(MAX_CHUNK_SIZE), timeout=1.0)
                             if not chunk:
                                 break
                             line = chunk
+                            # 尝试读取并丢弃剩余的行内容，直到找到换行符
+                            discard = await asyncio.wait_for(stream.readuntil(b'\n'), timeout=0.5)
                         except asyncio.TimeoutError:
-                            continue
+                            # 无法找到换行符，跳过丢弃
+                            pass
+                        except:
+                            # 其他读取错误，跳过丢弃
+                            pass
                     else:
                         # 其他 ValueError，跳出循环
                         break
                 if not line:
                     break
-                chunk = line.decode()
+                # 截断过长的输出块
+                chunk = line.decode(errors='replace')[:MAX_CHUNK_SIZE]
                 last_activity_time = time.time()  # 更新活动时间
                 if output_type == "stdout":
                     stdout_count += 1
