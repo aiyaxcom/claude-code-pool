@@ -947,6 +947,7 @@ async def run_claude_code_oneshot(
         return "", "Claude Code CLI 未安装"
 
     # 使用 -p (--print) 进行非交互式执行
+    # 注意：不使用 --continue，因为它会恢复上一次会话的工作目录，导致 target_dir 无效
     cmd = [
         claude_cmd,
         "-p",  # 非交互式输出
@@ -954,7 +955,6 @@ async def run_claude_code_oneshot(
         "--allowed-tools", "Write,Bash,Read,Edit,Glob,Grep,WebFetch,WebSearch",
         "--output-format", "stream-json",  # 流式 JSON 输出
         "--verbose",  # verbose 模式（stream-json 必需）
-        "--continue",
     ]
 
     # 添加 prompt 作为位置参数（在 -p 之后）
