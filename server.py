@@ -1058,10 +1058,11 @@ async def run_claude_code_oneshot(
 
         async def read_with_timeout():
             timeout_task = asyncio.create_task(check_timeout())
-            read_task = asyncio.create_task(asyncio.gather(
+            # asyncio.gather() 返回 Future，不需要 create_task 包装
+            read_task = asyncio.gather(
                 read_stream(process.stdout, "stdout"),
                 read_stream(process.stderr, "stderr"),
-            ))
+            )
 
             done, pending = await asyncio.wait(
                 {timeout_task, read_task},
