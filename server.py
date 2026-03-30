@@ -18,10 +18,12 @@ import json
 import uuid
 import time
 import httpx
+import logging
 from pathlib import Path
 from typing import Optional, Dict, List, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import StreamingResponse
@@ -452,6 +454,37 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+
+# ==================== 访问日志中间件 ====================
+
+# 不记录访问日志的路径（轮询请求等）
+NO_LOG_PATHS = ["/status"]
+
+
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    """访问日志中间件，过滤轮询请求"""
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = (time.time() - start_time) * 1000
+
+    # 检查是否需要记录日志
+    path = request.url.path
+    should_log = True
+    for no_log_path in NO_LOG_PATHS:
+        if path == no_log_path or path.startswith(no_log_path + "/"):
+            should_log = False
+            break
+
+    # 只记录重要请求
+    if should_log:
+        if response.status_code >= 400:
+            print(f"[{datetime.now().isoformat()}] WARN: {request.method} {path} - {response.status_code} ({process_time:.1f}ms)")
+        elif request.method in ["POST", "PUT", "DELETE", "PATCH"]:
+            print(f"[{datetime.now().isoformat()}] INFO: {request.method} {path} - {response.status_code} ({process_time:.1f}ms)")
+
+    return response
 
 
 # ==================== HTTP API 端点 ====================
@@ -1350,4 +1383,32 @@ def verify_output(target_dir: str, max_size: int = 10 * 1024 * 1024) -> bool:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import sys
+
+    # 配置日志格式（带时间戳，禁用默认访问日志）
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "default": {
+                "()": "uvicorn.logging.DefaultFormatter",
+                "fmt": "%(asctime)s - %(levelprefix)s %(message)s",
+                "datefmt": "%Y-%m-%d %H:%M:%S",
+            },
+        },
+        "handlers": {
+            "default": {
+                "formatter": "default",
+                "class": "logging.StreamHandler",
+                "stream": sys.stderr,
+            },
+        },
+        "loggers": {
+            "uvicorn": {"handlers": ["default"], "level": "INFO"},
+            "uvicorn.error": {"level": "INFO"},
+            # 禁用 uvicorn 的默认访问日志（由中间件处理）
+            "uvicorn.access": {"handlers": [], "level": "WARNING", "propagate": False},
+        },
+    }
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_config=log_config)
