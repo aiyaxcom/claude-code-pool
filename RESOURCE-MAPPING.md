@@ -19,6 +19,10 @@ services:
 
       # 全局 CLAUDE.md 映射（可选）
       - ./CLAUDE.md:/root/.claude/CLAUDE.md:ro
+
+      # Auto Memory 持久化（推荐）
+      # 包含项目记忆、任务历史等，容器重启后不丢失
+      - ./claude-memory:/root/.claude/projects
 ```
 
 ## 目录结构说明
