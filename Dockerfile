@@ -12,12 +12,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # 使用清华镜像源加速
 RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
 
-# 安装 Node.js 和 npm（使用清华 NodeSource 镜像）
+# 安装 Node.js 和 npm（使用官方 NodeSource）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
     git \
-    && curl -fsSL https://mirrors.tuna.tsinghua.edu.cn/nodesource/deb/setup_20.x | bash - \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
