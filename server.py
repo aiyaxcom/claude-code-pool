@@ -52,6 +52,9 @@ POOL_SIZE = int(os.getenv("POOL_SIZE", "3"))
 CLAUDE_TIMEOUT = int(os.getenv("CLAUDE_TIMEOUT", "300"))  # 空闲超时（无输出时）
 MAX_TOTAL_TIMEOUT = int(os.getenv("MAX_TOTAL_TIMEOUT", "3600"))  # 最大总执行时间（默认1小时）
 
+# 调试模式
+DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() == "true"
+
 # Claude Code 配置
 CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
 CLAUDE_AUTO_APPROVE = os.getenv("CLAUDE_AUTO_APPROVE", "all")  # all, none, selective
@@ -652,8 +655,9 @@ async def get_task_output(task_id: str, last_id: int = 0):
     if last_id > 0:
         outputs = outputs[last_id:]
 
-    # 添加调试日志
-    print(f"[DEBUG] 获取任务输出：task_id={task_id}, status={record.status}, total_outputs={len(task_outputs.get(task_id, []))}, last_id={last_id}, returning={len(outputs)}")
+    # 添加调试日志（仅在 DEBUG_MODE 时输出）
+    if DEBUG_MODE:
+        print(f"[DEBUG] 获取任务输出：task_id={task_id}, status={record.status}, total_outputs={len(task_outputs.get(task_id, []))}, last_id={last_id}, returning={len(outputs)}")
 
     return {
         "task_id": task_id,
@@ -711,7 +715,8 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
     """
     task_id = request.task_id or str(uuid.uuid4())[:8]
 
-    print(f"[DEBUG] 创建任务：task_id={task_id}")
+    if DEBUG_MODE:
+        print(f"[DEBUG] 创建任务：task_id={task_id}")
 
     task_registry[task_id] = TaskRecord(
         id=task_id,
@@ -740,7 +745,8 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
         metadata=request.metadata,
     )
 
-    print(f"[DEBUG] 任务已创建并加入后台执行：task_id={task_id}")
+    if DEBUG_MODE:
+        print(f"[DEBUG] 任务已创建并加入后台执行：task_id={task_id}")
 
     return TaskResponse(
         task_id=task_id,
@@ -1285,7 +1291,8 @@ async def broadcast_output(task_id: str, output_type: str, data: str):
 async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir: str = "", system_prompt: str = ""):
     """保存任务到数据库"""
     if not AsyncSessionLocal:
-        print(f"[DEBUG] 数据库未初始化，任务仅保存在内存中：task_id={task_record.id}")
+        if DEBUG_MODE:
+            print(f"[DEBUG] 数据库未初始化，任务仅保存在内存中：task_id={task_record.id}")
         return
 
     try:
@@ -1306,7 +1313,8 @@ async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir:
                 existing.summary = task_record.summary  # 保存总结
                 if task_record.result:
                     existing.result = json.dumps(task_record.result)
-                print(f"[DEBUG] 更新数据库任务：task_id={task_record.id}, status={task_record.status}")
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 更新数据库任务：task_id={task_record.id}, status={task_record.status}")
             else:
                 # 新建
                 new_task = TaskModel(
@@ -1324,10 +1332,12 @@ async def save_task_to_db(task_record: TaskRecord, prompt: str = "", target_dir:
                     summary=task_record.summary,  # 保存总结
                 )
                 session.add(new_task)
-                print(f"[DEBUG] 新建数据库任务：task_id={task_record.id}, prompt={prompt[:50]}...")
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 新建数据库任务：task_id={task_record.id}, prompt={prompt[:50]}...")
 
             await session.commit()
-            print(f"[DEBUG] 数据库提交成功：task_id={task_record.id}")
+            if DEBUG_MODE:
+                print(f"[DEBUG] 数据库提交成功：task_id={task_record.id}")
 
     except Exception as e:
         # 连接错误时尝试重新初始化
