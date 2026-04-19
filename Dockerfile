@@ -22,8 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Claude Code CLI（使用淘宝 npm 镜像）
-RUN npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com \
+# 安装 Claude Code CLI（使用官方源，镜像可能没有此包）
+RUN npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force
 
 # 验证安装
