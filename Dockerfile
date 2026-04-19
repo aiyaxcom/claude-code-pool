@@ -9,18 +9,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# 安装 Node.js 和 npm（用于安装 Claude Code CLI）
+# 使用清华镜像源加速
+RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
+
+# 安装 Node.js 和 npm（使用清华 NodeSource 镜像）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     gnupg \
     git \
-    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && curl -fsSL https://mirrors.tuna.tsinghua.edu.cn/nodesource/deb/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Claude Code CLI
-RUN npm install -g @anthropic-ai/claude-code \
+# 安装 Claude Code CLI（使用淘宝 npm 镜像）
+RUN npm install -g @anthropic-ai/claude-code --registry=https://registry.npmmirror.com \
     && npm cache clean --force
 
 # 验证安装
@@ -29,10 +32,10 @@ RUN claude --version
 # 创建 Claude Code 配置目录
 RUN mkdir -p /root/.claude
 
-# 安装 Python 依赖
+# 安装 Python 依赖（使用清华镜像源）
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 # 复制应用代码
 COPY server.py .
