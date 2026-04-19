@@ -715,8 +715,7 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
     """
     task_id = request.task_id or str(uuid.uuid4())[:8]
 
-    if DEBUG_MODE:
-        print(f"[DEBUG] 创建任务：task_id={task_id}")
+    print(f"[INFO] 创建任务：task_id={task_id}")
 
     task_registry[task_id] = TaskRecord(
         id=task_id,
@@ -745,8 +744,7 @@ async def create_task(request: CustomTaskRequest, background_tasks: BackgroundTa
         metadata=request.metadata,
     )
 
-    if DEBUG_MODE:
-        print(f"[DEBUG] 任务已创建并加入后台执行：task_id={task_id}")
+    print(f"[INFO] 任务已创建并加入后台执行：task_id={task_id}")
 
     return TaskResponse(
         task_id=task_id,
@@ -880,10 +878,11 @@ async def execute_custom_task(
     global active_tasks
 
     # 打印任务信息（用于调试）
-    print(f"[TASK] 开始执行任务：task_id={task_id}")
-    print(f"[TASK] target_dir={target_dir}")
-    print(f"[TASK] prompt={prompt[:200]}...")
-    print(f"[TASK] metadata={metadata}")
+    print(f"[INFO] 开始执行任务：task_id={task_id}")
+    if DEBUG_MODE:
+        print(f"[DEBUG] target_dir={target_dir}")
+        print(f"[DEBUG] prompt={prompt[:200]}...")
+        print(f"[DEBUG] metadata={metadata}")
 
     async with semaphore:
         active_tasks += 1
@@ -898,23 +897,26 @@ async def execute_custom_task(
                 target_dir = OUTPUT_ROOT
             if target_dir:
                 os.makedirs(target_dir, exist_ok=True)
-                print(f"[TASK] 创建/确认目录：{target_dir}")
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 创建/确认目录：{target_dir}")
 
             # 检查目录权限
             if os.access(target_dir, os.W_OK):
-                print(f"[TASK] 目录可写：{target_dir}")
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 目录可写：{target_dir}")
             else:
-                print(f"[TASK] 警告：目录不可写：{target_dir}")
+                print(f"[WARN] 目录不可写：{target_dir}")
 
             # 加载 CLAUDE.md
             claude_md_path = "/root/.claude/CLAUDE.md"
             if os.path.exists(claude_md_path):
                 with open(claude_md_path, "r") as f:
                     claude_md_content = f.read()
-                print(f"[TASK] 已加载 CLAUDE.md，长度：{len(claude_md_content)}")
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 已加载 CLAUDE.md，长度：{len(claude_md_content)}")
                 system_prompt = f"{system_prompt}\n\n## 项目规范\n{claude_md_content}"
             else:
-                print(f"[TASK] 警告：CLAUDE.md 不存在：{claude_md_path}")
+                print(f"[WARN] CLAUDE.md 不存在：{claude_md_path}")
 
             stdout, stderr, result_target_dir = await run_claude_code_oneshot(
                 prompt=prompt,
@@ -950,7 +952,8 @@ async def execute_custom_task(
             summary = extract_summary_from_stdout(stdout)
             if summary:
                 task_registry[task_id].summary = summary
-                print(f"[TASK] 提取总结成功，长度：{len(summary)} 字符")
+                if DEBUG_MODE:
+                    print(f"[DEBUG] 提取总结成功，长度：{len(summary)} 字符")
 
             # 更新数据库状态
             await save_task_to_db(task_registry[task_id])
@@ -1000,11 +1003,12 @@ async def run_claude_code_oneshot(
     cmd.append(prompt)
 
     # 打印调试信息
-    print(f"[OneShot] 执行 Claude 命令，target_dir={target_dir}")
-    print(f"[OneShot] 命令：{' '.join(cmd)}")
-    print(f"[OneShot] ANTHROPIC_BASE_URL={os.getenv('ANTHROPIC_BASE_URL', '未设置')}")
-    print(f"[OneShot] ANTHROPIC_MODEL={os.getenv('ANTHROPIC_MODEL', '未设置')}")
-    print(f"[OneShot] timeout={timeout}秒")
+    if DEBUG_MODE:
+        print(f"[DEBUG] 执行 Claude 命令，target_dir={target_dir}")
+        print(f"[DEBUG] 命令：{' '.join(cmd)}")
+        print(f"[DEBUG] ANTHROPIC_BASE_URL={os.getenv('ANTHROPIC_BASE_URL', '未设置')}")
+        print(f"[DEBUG] ANTHROPIC_MODEL={os.getenv('ANTHROPIC_MODEL', '未设置')}")
+        print(f"[DEBUG] timeout={timeout}秒")
 
     env = os.environ.copy()
     if CLAUDE_API_KEY:
@@ -1032,7 +1036,8 @@ async def run_claude_code_oneshot(
         env=env,
     )
 
-    print(f"[OneShot] 进程已启动，PID={process.pid}")
+    if DEBUG_MODE:
+        print(f"[DEBUG] 进程已启动，PID={process.pid}")
 
     system_message = f"{system_prompt}\n\n---\n\n{prompt}\n\n---\n\n请开始执行任务，不要等待确认，直接完成所有工作。"
 
@@ -1094,7 +1099,8 @@ async def run_claude_code_oneshot(
                     await broadcast_output(task_id, output_type, chunk)
 
         # 打印调试信息
-        print(f"[OneShot] 开始读取输出流，task_id={task_id}, idle_timeout={idle_timeout}s, max_total_timeout={max_total_timeout}s")
+        if DEBUG_MODE:
+            print(f"[DEBUG] 开始读取输出流，task_id={task_id}, idle_timeout={idle_timeout}s, max_total_timeout={max_total_timeout}s")
 
         # 检查超时的协程
         async def check_timeout():
@@ -1106,12 +1112,12 @@ async def run_claude_code_oneshot(
 
                 # 检查空闲超时（无输出）
                 if idle_duration >= idle_timeout:
-                    print(f"[OneShot] 空闲超时：{idle_duration:.1f}秒无输出")
+                    print(f"[INFO] 空闲超时：{idle_duration:.1f}秒无输出")
                     return "idle_timeout"
 
                 # 检查最大总超时
                 if total_duration >= max_total_timeout:
-                    print(f"[OneShot] 最大执行时间超时：{total_duration:.1f}秒")
+                    print(f"[INFO] 最大执行时间超时：{total_duration:.1f}秒")
                     return "max_timeout"
 
         # 读取输出并监控超时
@@ -1150,17 +1156,18 @@ async def run_claude_code_oneshot(
 
         # 检查返回码
         if process.returncode != 0:
-            print(f"[OneShot] 警告：Claude Code CLI 返回非零退出码：{process.returncode}")
+            print(f"[WARN] Claude Code CLI 返回非零退出码：{process.returncode}")
 
-        # 打印调试信息
-        print(f"[OneShot] 执行完成，task_id={task_id}, stdout={stdout_count}行，stderr={stderr_count}行")
-        print(f"[OneShot] 已存储输出到 task_outputs: {len(task_outputs.get(task_id, []))}条")
+        # 打印完成信息
+        print(f"[INFO] 执行完成，task_id={task_id}, stdout={stdout_count}行，stderr={stderr_count}行")
+        if DEBUG_MODE:
+            print(f"[DEBUG] 已存储输出到 task_outputs: {len(task_outputs.get(task_id, []))}条")
 
         return "".join(stdout_chunks), "".join(stderr_chunks), target_dir
 
     except TimeoutError as e:
         # 动态超时触发的超时错误
-        print(f"[OneShot] 超时终止进程：{e}")
+        print(f"[WARN] 超时终止进程：{e}")
         process.kill()
         raise
     except Exception as e:
