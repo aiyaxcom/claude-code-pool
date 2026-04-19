@@ -1232,9 +1232,7 @@ async def broadcast_output(task_id: str, output_type: str, data: str):
     if task_id not in task_outputs:
         task_outputs[task_id] = []
 
-    # 尝试解析 JSON 输出（stream-json 格式）
-    parsed_data = None
-    display_text = data
+    # 尝试解析 JSON 输出（stream-json 格式）- 用于提取 subagent_status
     subagent_status = None
 
     if output_type == "stdout" and data.strip().startswith("{"):
@@ -1244,32 +1242,32 @@ async def broadcast_output(task_id: str, output_type: str, data: str):
             if isinstance(json_data, dict):
                 # 检测消息类型
                 msg_type = json_data.get("type")
+                role = json_data.get("role")
+
+                # 根据消息类型/角色提取状态信息
                 if msg_type == "system":
-                    # 系统消息
                     subagent_status = json_data.get("message", "")
                 elif msg_type == "tool_use":
-                    # 工具调用
                     tool_name = json_data.get("name", "unknown")
                     subagent_status = f"正在调用工具：{tool_name}"
                 elif msg_type == "tool_result":
-                    # 工具结果
                     subagent_status = "工具调用完成"
-                elif msg_type == "assistant":
-                    # 助手消息
-                    content = json_data.get("content", "")
-                    if content:
-                        display_text = content[:200]  # 限制长度
-                elif msg_type == "user":
-                    # 用户消息
+                elif role == "assistant":
+                    # 助手消息 - 提取工具调用信息
+                    tool_calls = json_data.get("tool_calls", [])
+                    if tool_calls:
+                        tool_names = [tc.get("name", "unknown") for tc in tool_calls]
+                        subagent_status = f"调用工具：{', '.join(tool_names[:3])}"
+                elif role == "user":
                     subagent_status = "处理用户输入"
         except json.JSONDecodeError:
             pass
 
-    # 构建输出记录
+    # 构建输出记录 - 发送原始数据，让前端解析
     output_record = {
         "type": "output",
         "source": output_type,
-        "data": display_text,
+        "data": data,  # 发送原始 JSON 字符串，前端会自行解析
         "timestamp": get_local_datetime().isoformat(),
     }
 
@@ -1283,7 +1281,7 @@ async def broadcast_output(task_id: str, output_type: str, data: str):
     if task_id in task_websockets:
         message = {
             "type": "output",
-            "data": display_text,
+            "data": data,  # 发送原始数据
             "source": output_type,
         }
         if subagent_status:
